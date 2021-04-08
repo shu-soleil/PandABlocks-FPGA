@@ -19,91 +19,106 @@
 -- Additional Comments:
 --
 ----------------------------------------------------------------------------------
+
+--==============================================================================
+-- Libraries Declaration
+--==============================================================================
 library IEEE;
-use IEEE.STD_LOGIC_1164.ALL;
-use IEEE.NUMERIC_STD.ALL;
-use work.axi.all;
-use work.ipv4_types.all;
+  use IEEE.std_logic_1164.all;
+  use IEEE.numeric_std.all;
 
-entity UDP_TX is
-    Port (
-                        -- UDP Layer signals
-                        udp_tx_start                    : in std_logic;                                                 -- indicates req to tx UDP
-                        udp_txi                                 : in udp_tx_type;                                                       -- UDP tx cxns
-                        udp_tx_result                   : out std_logic_vector (1 downto 0);-- tx status (changes during transmission)
-                        udp_tx_data_out_ready   : out std_logic;                                                        -- indicates udp_tx is ready to take data
-                        -- system signals
-                        clk                                             : in  STD_LOGIC;                                                        -- same clock used to clock mac data and ip data
-                        reset                                   : in  STD_LOGIC;
-                        -- IP layer TX signals
-                        ip_tx_start                             : out std_logic;
-                        ip_tx                                           : out ipv4_tx_type;                                                     -- IP tx cxns
-                        ip_tx_result                    : in std_logic_vector (1 downto 0);             -- tx status (changes during transmission)
-                        ip_tx_data_out_ready    : in std_logic                                                                  -- indicates IP TX is ready to take data
-                        );
-end UDP_TX;
+library work;
+  use work.axi_types.all;
+  use work.ipv4_types.all;
 
-architecture Behavioral of UDP_TX is
-        type tx_state_type is (IDLE, PAUSE, SEND_UDP_HDR, SEND_USER_DATA);
 
-        type count_mode_type is (RST, INCR, HOLD);
-        type settable_cnt_type is (RST, SET, INCR, HOLD);
-        type set_clr_type is (SET, CLR, HOLD);
+--==============================================================================
+-- Entity Declaration
+--==============================================================================
+entity udp_tx is
+  port (
+    -- system signals (in)
+    clk                     : in  std_logic;                      -- same clock used to clock mac data and ip data
+    reset                   : in  std_logic;
+    -- UDP Layer signals (in)
+    udp_tx_start            : in  std_logic;                      -- indicates req to tx UDP
+    udp_txi                 : in  udp_tx_type;                    -- UDP tx cxns
+    udp_tx_result           : out std_logic_vector (1 downto 0);  -- tx status (changes during transmission)
+    udp_tx_data_out_ready   : out std_logic;                      -- indicates udp_tx is ready to take data
+    -- IP layer TX signals (out)
+    ip_tx_start             : out std_logic;
+    ip_tx                   : out ipv4_tx_type;                   -- IP tx cxns
+    ip_tx_result            : in  std_logic_vector (1 downto 0);  -- tx status (changes during transmission)
+    ip_tx_data_out_ready    : in  std_logic                       -- indicates IP TX is ready to take data
+    );
+end udp_tx;
 
-        -- TX state variables
-        signal udp_tx_state             : tx_state_type;
-        attribute fsm_encoding : string;
-        attribute fsm_encoding of udp_tx_state : signal is "one_hot";
-        attribute fsm_safe_state : string;
-        attribute fsm_safe_state of udp_tx_state : signal is "auto";
-        attribute mark_debug : string;
-        attribute mark_debug of udp_tx_state : signal is "true";
 
-        signal tx_count                         : unsigned (15 downto 0);
-        signal tx_result_reg            : std_logic_vector (1 downto 0);
-        signal ip_tx_start_reg  : std_logic;
+--==============================================================================
+-- Architecture Declaration
+--==============================================================================
+architecture behavioral of udp_tx is
 
-        -- tx control signals
-        signal next_tx_state    : tx_state_type;
-        signal set_tx_state             : std_logic;
-        signal next_tx_result   : std_logic_vector (1 downto 0);
-        signal set_tx_result            : std_logic;
-        signal tx_count_val             : unsigned (15 downto 0);
-        signal tx_count_mode            : settable_cnt_type;
-        signal tx_data                          : std_logic_vector (7 downto 0);
-        signal set_last                 : std_logic;
-        signal set_ip_tx_start  : set_clr_type;
-        signal tx_data_valid            : std_logic;                    -- indicates whether data is valid to tx or not
+    type tx_state_type is (IDLE, PAUSE, SEND_UDP_HDR, SEND_USER_DATA);
 
-        -- tx temp signals
-        signal total_length             : std_logic_vector (15 downto 0);       -- computed combinatorially from header size
+    type count_mode_type is (RST, INCR, HOLD);
+    type settable_cnt_type is (RST, SET, INCR, HOLD);
+    type set_clr_type is (SET, CLR, HOLD);
 
-        -- CHIPSCOPE ILA probes
-        signal udp_tx_start_s                   :  std_logic;                                           --in    -- indicates req to tx UDP
-        signal udp_txi_s                                :  udp_tx_type;                                         --in    -- UDP tx cxns
-        signal udp_tx_result_s                  :  std_logic_vector (1 downto 0);       --out   -- tx status (changes during transmission)
-        signal udp_tx_data_out_ready_s  :  std_logic;                                           --out   -- indicates udp_tx is ready to take data
-        signal udp_txi_s_data_data_out_last: std_logic;
-         -- IP layer TX signals                                             --
-        signal ip_tx_start_s                :  std_logic;                       --out
-        signal ip_tx_s                                  :  ipv4_tx_type;                                        --out   -- IP tx cxns
-        signal ip_tx_result_s                   :  std_logic_vector (1 downto 0);       --in    -- tx status (changes during transmission)
-        signal ip_tx_data_out_ready_s   :  std_logic;                       --in
-        signal ip_tx_s_data_data_out_last:  std_logic;
+    -- TX state variables
+    signal udp_tx_state             : tx_state_type;
+    attribute fsm_encoding : string;
+    attribute fsm_encoding of udp_tx_state : signal is "one_hot";
+    attribute fsm_safe_state : string;
+    attribute fsm_safe_state of udp_tx_state : signal is "auto";
+    attribute mark_debug : string;
+    attribute mark_debug of udp_tx_state : signal is "true";
 
-        signal probe5               : std_logic_vector(31 downto 0);
+    signal tx_count                         : unsigned (15 downto 0);
+    signal tx_result_reg            : std_logic_vector (1 downto 0);
+    signal ip_tx_start_reg  : std_logic;
 
-        attribute keep : string;--keep name for ila probes
-        attribute keep of udp_tx_state   : signal is "true";
-        attribute keep of tx_count       : signal is "true";
-        attribute keep of udp_tx_start_s               : signal is "true";
-        attribute keep of udp_txi_s_data_data_out_last : signal is "true";
-        attribute keep of udp_tx_result_s              : signal is "true";
-        attribute keep of udp_tx_data_out_ready_s      : signal is "true";
-        attribute keep of ip_tx_start_s                : signal is "true";
-        attribute keep of ip_tx_s_data_data_out_last   : signal is "true";
-        attribute keep of ip_tx_result_s               : signal is "true";
-        attribute keep of ip_tx_data_out_ready_s       : signal is "true";
+    -- tx control signals
+    signal next_tx_state    : tx_state_type;
+    signal set_tx_state             : std_logic;
+    signal next_tx_result   : std_logic_vector (1 downto 0);
+    signal set_tx_result            : std_logic;
+    signal tx_count_val             : unsigned (15 downto 0);
+    signal tx_count_mode            : settable_cnt_type;
+    signal tx_data                          : std_logic_vector (7 downto 0);
+    signal set_last                 : std_logic;
+    signal set_ip_tx_start  : set_clr_type;
+    signal tx_data_valid            : std_logic;                    -- indicates whether data is valid to tx or not
+
+    -- tx temp signals
+    signal total_length             : std_logic_vector (15 downto 0);       -- computed combinatorially from header size
+
+    -- CHIPSCOPE ILA probes
+    signal udp_tx_start_s                   :  std_logic;                                           --in    -- indicates req to tx UDP
+    signal udp_txi_s                                :  udp_tx_type;                                         --in    -- UDP tx cxns
+    signal udp_tx_result_s                  :  std_logic_vector (1 downto 0);       --out   -- tx status (changes during transmission)
+    signal udp_tx_data_out_ready_s  :  std_logic;                                           --out   -- indicates udp_tx is ready to take data
+    signal udp_txi_s_data_data_out_last: std_logic;
+     -- IP layer TX signals                                             --
+    signal ip_tx_start_s                :  std_logic;                       --out
+    signal ip_tx_s                                  :  ipv4_tx_type;                                        --out   -- IP tx cxns
+    signal ip_tx_result_s                   :  std_logic_vector (1 downto 0);       --in    -- tx status (changes during transmission)
+    signal ip_tx_data_out_ready_s   :  std_logic;                       --in
+    signal ip_tx_s_data_data_out_last:  std_logic;
+
+    signal probe5               : std_logic_vector(31 downto 0);
+
+    attribute keep : string;--keep name for ila probes
+    attribute keep of udp_tx_state   : signal is "true";
+    attribute keep of tx_count       : signal is "true";
+    attribute keep of udp_tx_start_s               : signal is "true";
+    attribute keep of udp_txi_s_data_data_out_last : signal is "true";
+    attribute keep of udp_tx_result_s              : signal is "true";
+    attribute keep of udp_tx_data_out_ready_s      : signal is "true";
+    attribute keep of ip_tx_start_s                : signal is "true";
+    attribute keep of ip_tx_s_data_data_out_last   : signal is "true";
+    attribute keep of ip_tx_result_s               : signal is "true";
+    attribute keep of ip_tx_data_out_ready_s       : signal is "true";
 
 
 -- IP datagram header format
@@ -323,6 +338,7 @@ begin
                         end if;
                 end if;
         end process;
+
 ---------------------------------------------------------------------------
 -- Chipscope ILA Debug purpose
 ---------------------------------------------------------------------------
