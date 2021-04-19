@@ -44,7 +44,7 @@ library work;
 
 
 --==============================================================================
--- Entiy Declaration
+-- Entity Declaration
 --==============================================================================
 entity ip_complete_nomac is
   generic (
@@ -96,101 +96,10 @@ end ip_complete_nomac;
 --==============================================================================
 architecture structural of ip_complete_nomac is
 
-
---   component IPv4
---     port(
---       -- IP Layer signals
---       ip_tx_start          : in  std_logic;
---       ip_tx                : in  ipv4_tx_type;                  -- IP tx cxns
---       ip_tx_result         : out std_logic_vector (1 downto 0);  -- tx status (changes during transmission)
---       ip_tx_data_out_ready : out std_logic;  -- indicates IP TX is ready to take data
---       ip_rx_start          : out std_logic;  -- indicates receipt of ip frame.
---       ip_rx                : out ipv4_rx_type;
---       -- system control signals
---       rx_clk               : in  std_logic;
---       tx_clk               : in  std_logic;
---       reset                : in  std_logic;
---       our_ip_address       : in  std_logic_vector (31 downto 0);
---       our_mac_address      : in  std_logic_vector (47 downto 0);
---       -- system status signals
---       rx_pkt_count         : out std_logic_vector(7 downto 0);  -- number of IP pkts received for us
---       -- ARP lookup signals
---       arp_req_req          : out arp_req_req_type;
---       arp_req_rslt         : in  arp_req_rslt_type;
---       -- MAC layer RX signals
---       mac_data_in          : in  std_logic_vector (7 downto 0);  -- ethernet frame (from dst mac addr through to last byte of frame)
---       mac_data_in_valid    : in  std_logic;  -- indicates data_in valid on clock
---       mac_data_in_last     : in  std_logic;  -- indicates last data in frame
---       -- MAC layer TX signals
---       mac_tx_req           : out std_logic;  -- indicates that ip wants access to channel (stays up for as long as tx)
---       mac_tx_granted       : in  std_logic;  -- indicates that access to channel has been granted
---       mac_data_out_ready   : in  std_logic;  -- indicates system ready to consume data
---       mac_data_out_valid   : out std_logic;  -- indicates data out is valid
---       mac_data_out_first   : out std_logic;  -- with data out valid indicates the first byte of a frame
---       mac_data_out_last    : out std_logic;  -- with data out valid indicates the last byte of a frame
---       mac_data_out         : out std_logic_vector (7 downto 0)  -- ethernet frame (from dst mac addr through to last byte of frame)
---       );
---   end component;
---
---   component arp
---     generic (
---       CLOCK_FREQ      : integer := 125000000;  -- freq of data_in_clk -- needed to timout cntr
---       ARP_TIMEOUT     : integer := 60;  -- ARP response timeout (s)
---       ARP_MAX_PKT_TMO : integer := 1;  -- (added for compatibility with arpv2. this value not used in this impl)
---       MAX_ARP_ENTRIES : integer := 1  -- (added for compatibility with arpv2. this value not used in this impl)
---       );
---     port (
---       -- lookup request signals
---       arp_req_req     : in  arp_req_req_type;
---       arp_req_rslt    : out arp_req_rslt_type;
---       -- MAC layer RX signals
---       data_in_clk     : in  std_logic;
---       reset           : in  std_logic;
---       data_in         : in  std_logic_vector (7 downto 0);  -- ethernet frame (from dst mac addr through to last byte of frame)
---       data_in_valid   : in  std_logic;  -- indicates data_in valid on clock
---       data_in_last    : in  std_logic;  -- indicates last data in frame
---       -- MAC layer TX signals
---       mac_tx_req      : out std_logic;  -- indicates that ip wants access to channel (stays up for as long as tx)
---       mac_tx_granted  : in  std_logic;  -- indicates that access to channel has been granted
---       data_out_clk    : in  std_logic;
---       data_out_ready  : in  std_logic;  -- indicates system ready to consume data
---       data_out_valid  : out std_logic;  -- indicates data out is valid
---       data_out_first  : out std_logic;  -- with data out valid indicates the first byte of a frame
---       data_out_last   : out std_logic;  -- with data out valid indicates the last byte of a frame
---       data_out        : out std_logic_vector (7 downto 0);  -- ethernet frame (from dst mac addr through to last byte of frame)
---       -- system signals
---       our_mac_address : in  std_logic_vector (47 downto 0);
---       our_ip_address  : in  std_logic_vector (31 downto 0);
---       control         : in  arp_control_type;
---       req_count       : out std_logic_vector(7 downto 0)    -- count of arp pkts received
---       );
---   end component;
---
---   component tx_arbitrator
---     port(
---       clk   : in std_logic;
---       reset : in std_logic;
---
---       req_1   : in  std_logic;
---       grant_1 : out std_logic;
---       data_1  : in  std_logic_vector(7 downto 0);  -- data byte to tx
---       valid_1 : in  std_logic;                     -- tdata is valid
---       first_1 : in  std_logic;                     -- indicates first byte of frame
---       last_1  : in  std_logic;                     -- indicates last byte of frame
---
---       req_2   : in  std_logic;
---       grant_2 : out std_logic;
---       data_2  : in  std_logic_vector(7 downto 0);  -- data byte to tx
---       valid_2 : in  std_logic;                     -- tdata is valid
---       first_2 : in  std_logic;                     -- indicates first byte of frame
---       last_2  : in  std_logic;                     -- indicates last byte of frame
---
---       data  : out std_logic_vector(7 downto 0);  -- data byte to tx
---       valid : out std_logic;                     -- tdata is valid
---       first : out std_logic;                     -- indicates first byte of frame
---       last  : out std_logic                      -- indicates last byte of frame
---       );
---   end component;
+  -------------------------------
+  -- Components declarations
+  -------------------------------
+  -- see ip_layer_component_pkg.vhd
 
 
   -------------------

@@ -1,4 +1,4 @@
---==============================================================================
+--------------------------------------------------------------------------------
 -- Company:
 -- Engineer:            Peter Fall
 --
@@ -23,7 +23,11 @@
 -- Revision 0.05 - Fix cks calc when add of high bits causes another ovf
 -- Additional Comments:
 --
---==============================================================================
+-- Thierry GARREL (ELSYS-Design)
+--    restructure code : tab 2 spaces, add comments,
+--    reorder some signals declarations
+--
+--------------------------------------------------------------------------------
 
 
 --==============================================================================
@@ -44,13 +48,14 @@ library work;
 --==============================================================================
 entity ipv4_tx is
   port (
-    -- IP Layer signals
+    -- IP Layer signals (in)
     ip_tx_start           : in  std_logic;
     ip_tx                 : in  ipv4_tx_type;                   -- IP tx cxns
+    -- IP Layer signals (out)
     ip_tx_result          : out std_logic_vector(1 downto 0);  -- tx status (changes during transmission)
     ip_tx_data_out_ready  : out std_logic;                      -- indicates IP TX is ready to take data
 
-    -- system signals
+    -- system signals (in)
     clk                   : in  std_logic;                      -- same clock used to clock mac data and ip data
     reset                 : in  std_logic;
     our_ip_address        : in  std_logic_vector(31 downto 0);
@@ -117,11 +122,14 @@ architecture Behavioral of ipv4_tx is
 
   constant IP_TTL : std_logic_vector(7 downto 0) := x"08";--x"80";
 
+
   -------------------------------
   -- Internal signals
   -------------------------------
 
   -- TX state variables
+  signal set_tx_state                   : std_logic;
+  signal next_tx_state                  : tx_state_type;
   signal tx_state                       : tx_state_type;
 
   attribute fsm_encoding                : string;
@@ -145,8 +153,6 @@ architecture Behavioral of ipv4_tx is
   signal mac_data_out_ready_reg         : std_logic;
 
   -- tx control signals
-  signal next_tx_state                  : tx_state_type;
-  signal set_tx_state                   : std_logic;
   signal next_tx_result                 : std_logic_vector(1 downto 0);
   signal set_tx_result                  : std_logic;
   signal tx_mac_value                   : std_logic_vector(47 downto 0);

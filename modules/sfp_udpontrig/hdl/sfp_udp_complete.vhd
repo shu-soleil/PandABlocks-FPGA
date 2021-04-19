@@ -45,22 +45,22 @@ library work;
   use work.ipv4_types.all;
   use work.arp_types.all;
   use work.top_defines.all;
-  use work.sfp_udp_complete_component_pkg.all; -- components declarations package
+  use work.sfp_udp_component_pkg.all; -- components declarations package
 
-library unisim;
-  use unisim.vcomponents.all;
+library UNISIM;
+  use UNISIM.vcomponents.all;
 
 
 --==============================================================================
--- Entiy Declaration
+-- Entity Declaration
 --==============================================================================
 entity SFP_UDP_Complete is
   generic (
-    DEBUG               : string  := "FALSE";
-    CLOCK_FREQ          : integer := 125000000;         -- freq of data_in_clk needed to timout cntr
-    ARP_TIMEOUT         : integer := 60;                -- ARP response timeout (s)
-    ARP_MAX_PKT_TMO     : integer := 5;                 -- wrong nwk pkts received before set error
-    MAX_ARP_ENTRIES     : integer := 255                -- max entries in the ARP store
+    DEBUG                       : string  := "FALSE";
+    CLOCK_FREQ                  : integer := 125000000;         -- freq of data_in_clk needed to timout cntr
+    ARP_TIMEOUT                 : integer := 60;                -- ARP response timeout (s)
+    ARP_MAX_PKT_TMO             : integer := 5;                 -- wrong nwk pkts received before set error
+    MAX_ARP_ENTRIES             : integer := 255                -- max entries in the ARP store
   );
   port (
     -- Clock and Reset
@@ -77,17 +77,17 @@ entity SFP_UDP_Complete is
     SFP_STATUS_COUNT            : out std_logic_vector(31 downto 0);
     -- Block Parameters
     our_mac_address             : in std_logic_vector(47 downto 0);
-    dest_udp_port               : in std_logic_vector(15 downto 0);
+    our_ip_address              : in std_logic_vector(31 downto 0);
     our_udp_port                : in std_logic_vector(15 downto 0);
     dest_ip_address             : in std_logic_vector(31 downto 0);
-    our_ip_address              : in std_logic_vector(31 downto 0);
+    dest_udp_port               : in std_logic_vector(15 downto 0);
     -- GTX I/O
     gtrefclk                    : in  std_logic;
     RXN_IN                      : in  std_logic;
     RXP_IN                      : in  std_logic;
     TXN_OUT                     : out std_logic;
     TXP_OUT                     : out std_logic
-    );
+  );
 end SFP_UDP_Complete;
 
 
@@ -507,7 +507,7 @@ signal_detect<='1';
   ------------------------------------------------------------------------------
   -- Instantiate the UDP layer with PING
   ------------------------------------------------------------------------------
-  udp_ping_block: udp_complete_ping_nomac
+  udp_block: udp_complete_ping_nomac
     generic map (
       CLOCK_FREQ              => CLOCK_FREQ,
       ARP_TIMEOUT             => ARP_TIMEOUT,
@@ -527,6 +527,8 @@ signal_detect<='1';
       arp_pkt_count           => open,
       ip_pkt_count            => open,
       icmp_pkt_count          => open,
+      icmp_pkt_err            => open,
+      icmp_pkt_err_count      => open,
       -- UDP TX signals (in)
       udp_tx_start            => udp_tx_start,
       udp_txi                 => udp_txi,
@@ -535,10 +537,13 @@ signal_detect<='1';
       -- UDP RX signals (out)
       udp_rx_start            => udp_rx_start,
       udp_rxo                 => udp_rxo,
-      -- IP RX signals (out)
-      ip_rx_start             => open,
-      ip_rx_hdr               => open,
-      ip_rx_data              => open,
+      -- IP RX signals (out) // DEBUG
+      ip_rx_start_o           => open,
+      ip_rx_hdr_o             => open,
+      ip_rx_data_o            => open,
+      -- IP TX status (out) // DEBUG
+      ip_tx_start_o           => open,
+      ip_tx_result_o          => open,
       -- MAC Receiver (in)
       mac_rx_tready           => rx_axis_mac_tready,        -- out
       mac_rx_tdata            => rx_axis_mac_tdata,

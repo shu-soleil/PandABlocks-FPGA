@@ -6,18 +6,23 @@
 -- Purpose        : ICMP layer which responds only to echo requests with an echo reply
 --                  Any other ICMP messages are discarded (ignored).
 --                  Can respond to any ping containing up to 1472 bytes of data.
---                  ie 1500 bytes - 20 (IP Header) - 8 (ICMP header)
+--                     which corresponds to an Ipv4 frame of 1500 bytes
 --
--- Author         : Thierry GARREL (ELSYS-Design)
+-- Author         : Thierry GARREL (ELSYS-Design) [TGA]
 -- Synthesizable  : YES
 -- Language       : VHDL-93
+--
 --------------------------------------------------------------------------------
 -- Copyright (c) 2021 Synchrotron SOLEIL - L'Orme des Merisiers Saint-Aubin
 -- BP 48 91192 Gif-sur-Yvette Cedex  - https://www.synchrotron-soleil.fr
 --------------------------------------------------------------------------------
 
 -- TODO
--- 2 clocks inputs : rx_clk (RX part) and tx_clk (TX part)
+-- Separate Rx side and Tx side with 2 clock domains rx_clk and tx_clk
+-- Add 2-stage synchronizer between Rx site and Tx side
+-- Rename FSM states to ST_<name>
+
+-- DEAD code : never go in ERR state
 
 
 
@@ -38,6 +43,13 @@ library work;
 -- Entity Declaration
 --==============================================================================
 entity udp_ping is
+  generic (
+    -- Limit the amount of logic cells used to store ICMP optional data (synthesis only)
+    -- Windows ping issues 32 bytes of ICMP data by default
+    -- Linux   ping issues 64 bytes of ICMP data by default (8 bytes of header & 56 bytes of optional data)
+    -- Theoritical max ping size with non fragmented IPv4 frames is 1472 bytes, ie 1500 - 20 (Ipv4 header) -8 (icmp header)
+    MAX_PING_SIZE         : natural := 256                     -- Maximum pkt size. Larger echo requests will be ignored. (max 1472)
+  );
   port (
     -- System signals (in)
     clk                   : in  std_logic;                      -- asynchronous clock
@@ -45,8 +57,10 @@ entity udp_ping is
     -- IP layer RX signals (in)
     ip_rx_start           : in  std_logic;                      -- indicates receipt of ip frame
     ip_rx                 : in  ipv4_rx_type;                   -- IP rx cxns
-    -- status signals
+    -- status signals (out)
     icmp_pkt_count        : out std_logic_vector(7 downto 0);   -- number of ICMP pkts received for us
+    icmp_pkt_err          : out std_logic;                      -- indicate an errored ICMP pkt (type <> x"0800" or pkt greater than 1472 bytes)
+    icmp_pkt_err_count    : out std_logic_vector(7 downto 0);   -- number of errored ICMP pkts received for us
     -- IP layer TX signals (out)
     ip_tx_start           : out  std_logic;
     ip_tx                 : out ipv4_tx_type;                   -- IP tx cxns
@@ -59,16 +73,9 @@ end udp_ping;
 -- .hdr   : .is_valid .protocol(7:0) .data_length(15:0) .src_ip_addr(31:0) .num_frame_errors(7:0) .last_error_code(3:0) .is_broadcast
 -- .data  : .data_in(7:0) .data_in_valid .data_in_last
 
-
 -- ip_tx (ipv4_tx_type)
 -- .hdr    : .protocol(7:0) .data_length(15:0) .dst_ip_addr(31:0)
 -- .data   : .data_out(7:0) .data_out_valid .data_out_last
-
--- ip_tx_result
--- IPTX_RESULT_NONE     : std_logic_vector(1 downto 0) := "00";
--- IPTX_RESULT_SENDING  : std_logic_vector(1 downto 0) := "01";
--- IPTX_RESULT_ERR      : std_logic_vector(1 downto 0) := "10";
--- IPTX_RESULT_SENT     : std_logic_vector(1 downto 0) := "11";
 
 
 -------------------------------------------------------
@@ -146,8 +153,7 @@ end udp_ping;
 --
 -- Les données reçues dans un message d’écho doivent être réémises dans la réponse.
 -- Ainsi, si le message de retour correspond à l’émission, on en déduit que l’Hote est présent.
-
-
+--
 
 
 --==============================================================================
@@ -155,14 +161,19 @@ end udp_ping;
 --==============================================================================
 architecture behavioral of udp_ping is
 
-  -- RX side :  receive IP datagram with protocol = ICMP (0x01) :
---              -detects Echo Request (Type 08 Code 00)
-  --            -prepare Echo Reply response
+-- RX side :  receive IP datagram with protocol = ICMP (0x01) :
+--            detects Echo Request (Type 08 Code 00)
+--            prepare Echo Reply response
 
-  -- TX side :  send IP datagram with protocol = ICMP (0x01)
-  --            dest_ip_addr = src_ip_addr
-  --            and Echo Reply response  (Type 00 code 00)
-  --
+-- TX side :  send IP datagram with protocol = ICMP (0x01)
+--            set dest_ip_addr = src_ip_addr
+--            and Echo Reply response  (Type 00 code 00) with same data received in Echo Request
+
+  --------------------------------
+  -- Constants
+  --------------------------------
+  constant icmp_checksum_offset   : std_logic_vector(15 downto 0) := x"0800"; -- 2048
+
 
   -------------------------------------------------
   -- Common type definitions
@@ -175,17 +186,16 @@ architecture behavioral of udp_ping is
   type rx_state_type              is (IDLE, ICMP_HEADER, USER_DATA, WAIT_END, ERR);
   type tx_state_type              is (IDLE, PAUSE, SEND_ICMP_HEADER, SEND_USER_DATA);
 
+  -- ICMP data array : use to save ICMP Echo Request optional data
+  type icmp_data_array_type is array(1 to MAX_PING_SIZE) of std_logic_vector(7 downto 0);
+
   --------------------------------
   -- inputs followers signals
   --------------------------------
-  signal rx_event           : rx_event_type; -- DATA, NO_EVENT
-  signal rx_data_length     : unsigned(15 downto 0);  -- data_length extracted from ip_rx header  ip_rx.hdr.data_length
-
-  --------------------------------
-  -- inputs register pipeline
-  --------------------------------
-  type data_in_array is array(1 to 3) of axi_in_type; -- data_in data_in_valid data_in_last
-  signal rx_data_reg      : data_in_array;
+  signal rx_start           : std_logic;                -- ip_rx_start input register
+  signal rx_in              : ipv4_rx_type;             -- ip_rx       input register
+  signal rx_event           : rx_event_type;            -- DATA, NO_EVENT
+  signal rx_data_length     : unsigned(15 downto 0);    -- data_length extracted from ip_rx header  ip_rx.hdr.data_length
 
   -------------------------------------------------
   -- RX side states and signals definition
@@ -198,17 +208,29 @@ architecture behavioral of udp_ping is
   signal rx_count_mode      : settable_count_mode_type;
   signal rx_count           : unsigned(15 downto 0);
 
-  signal set_pkt_cnt        : count_mode_type;
-  signal rx_pkt_counter     : unsigned(7 downto 0);  -- number of ICMP pkts received for us
+  signal set_pkt_cnt        : std_logic;
+  signal rx_pkt_count       : unsigned(7 downto 0);  -- number of ICMP pkts received for us
+
+  signal set_pkt_type_err   : std_logic; -- received pkt type_code is different from x"0800" (Echo Request)
+  signal set_pkt_size_err   : std_logic; -- received pkt size is greater than 1472 bytes (MAX_PING_SIZE)
+  signal reset_pkt_err      : std_logic;
+  signal rx_pkt_err_reg     : std_logic;
+  signal rx_pkt_err_count   : unsigned(7 downto 0);  -- number of errorred ICMP pkts received for us
+
 
   -- capture ICMP header fields
-  signal set_src_ip         : std_logic;
-  signal set_identifier_H   : std_logic;
-  signal set_identifier_L   : std_logic;
-  signal set_seq_number_H   : std_logic;
-  signal set_seq_number_L   : std_logic;
+  signal set_src_ip         : std_logic; -- capture ip_rx header
+  signal set_checksum_H     : std_logic; -- capture ICMP header checksum field msb
+  signal set_checksum_L     : std_logic; -- capture ICMP header checksum field lsb
+  signal set_identifier_H   : std_logic; -- capture ICMP header Identificier field msb
+  signal set_identifier_L   : std_logic; -- capture ICMP header Identificier field lsb
+  signal set_seq_number_H   : std_logic; -- capture ICMP header Sequence_number field msb
+  signal set_seq_number_L   : std_logic; -- capture ICMP header Sequence_number field lsb
 
-  signal icmp_rx_header     : icmp_header_type; -- src_ip_addr  data_length  msg_type msg_code checksum identifier  seq_number
+  signal icmp_rx_header     : icmp_header_type;       -- src_ip_addr  data_length  msg_type msg_code checksum identifier  seq_number
+  signal icmp_rx_data_array : icmp_data_array_type;   -- ICMP data array memory
+
+  signal icmp_reply_checksum : std_logic_vector(15 downto 0); -- ICMP Echo Reply checksum
 
   signal set_echo_request   : std_logic;      -- indicate we have receive an ICMP Echo Request rame (1 clk pulse)
   signal icmp_echo_request  : std_logic;
@@ -230,7 +252,9 @@ architecture behavioral of udp_ping is
   signal set_ip_tx_start    : set_clr_type;
   signal ip_tx_start_reg    : std_logic;          -- precurseur ip_tx_start (out)
 
-  signal tx_data            : axi_out_type;       -- precurseru ip_tx_data (out)
+  signal tx_data_out        : std_logic_vector(7 downto 0);
+  signal tx_data_valid      : std_logic;
+  signal tx_data_last       : std_logic;
 
   --------------------------------
   -- outputs followers signals
@@ -240,19 +264,26 @@ architecture behavioral of udp_ping is
 
 
   --------------------------------
-  -- Signal attributes (debug)
+  -- FSM encoding attributes
   --------------------------------
   attribute fsm_encoding    : string;
   attribute fsm_safe_state  : string;
   attribute mark_debug      : string;
 
   attribute fsm_encoding   of rx_state : signal is "one_hot";
-  attribute fsm_safe_state of rx_state : signal is "auto_safe_state";
+  attribute fsm_safe_state of rx_state : signal is "reset_state";  -- auto
   attribute mark_debug     of rx_state : signal is "true";
 
   attribute fsm_encoding   of tx_state : signal is "one_hot";
-  attribute fsm_safe_state of tx_state : signal is "auto_safe_state";
+  attribute fsm_safe_state of tx_state : signal is "reset_state"; -- auto
   attribute mark_debug     of tx_state : signal is "true";
+
+  attribute keep                    : string;--keep name for ila probes
+  attribute keep of rx_state        : signal is "true";
+  attribute keep of rx_count        : signal is "true";
+  attribute keep of tx_state        : signal is "true";
+  attribute keep of tx_count        : signal is "true";
+
 
 
 --==============================================================================
@@ -260,43 +291,77 @@ architecture behavioral of udp_ping is
 --==============================================================================
 begin
 
-  -- inputs followers
-
   -- determine event (if any)   // dataval (udp_rx, ipv4_rx)
-  rx_event        <= DATA    when (ip_rx.data.data_in_valid = '1') else NO_EVENT;
-  rx_data_length  <= unsigned(ip_rx.hdr.data_length) - 8 ;  -- user_data length = total length -8 (header length)
+  --rx_event        <= DATA when (ip_rx.data.data_in_valid = '1') else NO_EVENT;
+  --rx_data_length  <= unsigned(ip_rx.hdr.data_length) - 8 ;  -- user_data length = total length -8 (header length)
+
+  -------------------------------------------------------------
+  -- Process : input_proc
+  -- Description : check ip_rx validity
+  -------------------------------------------------------------
+  input_proc : process(clk)
+  begin
+    if rising_edge(clk) then
+      if reset = '1' then
+        rx_start          <= '0';
+        rx_in.hdr         <= C_IPV4_RX_HEADER_NULL;
+        rx_in.data        <= C_AXI_IN_DATA_NULL;
+        rx_event          <= NO_EVENT;
+        rx_data_length    <= (others=>'0');
+      else
+        -- ip_rx input register
+        rx_start <= ip_rx_start;
+        rx_in    <= ip_rx;
+        -- rx_event
+        if (ip_rx.data.data_in_valid = '1') then
+          rx_event <= DATA;
+        else
+          rx_event <= NO_EVENT;
+        end if;
+        -- determine user_data length : substract ICMP header length (8 bytes) from IPv4 data_length
+        if (ip_rx.hdr.is_valid = '1') then
+          rx_data_length <= unsigned(ip_rx.hdr.data_length) - 8 ;
+        end if;
+      end if; -- reset
+    end if; -- clk
+  end process input_proc;
+
 
 
   -- ***************************************************************************
   --                             ICMP Rx part
   -- ***************************************************************************
 
-  -----------------------------------------------------------------------
+  ------------------------------------------------------------------------------
+  -- Process: rx_comb_proc
   -- RX combinatorial process to implement FSM and determine control signals
-  -----------------------------------------------------------------------
-  rx_combinatorial : process (
+  ------------------------------------------------------------------------------
+  rx_comb_proc : process (
     -- input signals
-    ip_rx_start, ip_rx,
+    rx_start, rx_in, rx_event, rx_data_length,
     -- state variables
     rx_state, rx_count,
     -- control signals
-    next_rx_state, set_rx_state, set_pkt_cnt, rx_event, rx_count_mode,
-    set_src_ip, set_identifier_H, set_identifier_L, set_seq_number_H, set_seq_number_L
+    next_rx_state, set_rx_state, set_pkt_cnt, set_pkt_type_err, set_pkt_size_err, reset_pkt_err, rx_count_mode,
+    set_src_ip, set_checksum_H, set_checksum_L, set_identifier_H, set_identifier_L, set_seq_number_H, set_seq_number_L
     )
   begin
 
     -- set signal defaults
-    rx_count_mode     <= HOLD;
-    next_rx_state     <= IDLE;
-    set_rx_state      <= '0';  -- HOLD rx_state
-    set_pkt_cnt       <= HOLD;
+    rx_count_mode       <= HOLD;
+    next_rx_state       <= IDLE;    -- prevent from infering a latch
+    set_rx_state        <= '0';
+    set_pkt_cnt         <= '0';
+    set_pkt_type_err    <= '0';
+    set_pkt_size_err    <= '0';
+    reset_pkt_err       <= '0';
 
-    set_src_ip        <= '0';
-    set_identifier_H  <= '0';
-    set_identifier_L  <= '0';
-    set_seq_number_H  <= '0';
-    set_seq_number_L  <= '0';
-    set_echo_request  <= '0';
+    set_src_ip          <= '0';
+    set_checksum_H      <= '0'; set_checksum_L    <= '0';
+    set_identifier_H    <= '0'; set_identifier_L  <= '0';
+    set_seq_number_H    <= '0'; set_seq_number_L  <= '0';
+    set_echo_request    <= '0';
+
 
     -- RX_FSM combinatorial
     case rx_state is
@@ -305,24 +370,34 @@ begin
       -----------------
       when IDLE =>
         rx_count_mode <= RST;
+
         case rx_event is
           when NO_EVENT =>                          -- (nothing to do)
-          when DATA =>
-            if ip_rx.hdr.protocol = ICMP_PROTOCOL then      -- ICMP protocol x"01"
+          when DATA     =>
+            if rx_in.hdr.protocol = C_ICMP_PROTOCOL then      -- x"01"
 
               -- ignore pkts that are not ICMP type 08 (Echo Request)
-              if (ip_rx.data.data_in /= ICMP_TYPE_08) then
-                rx_count_mode   <= RST;
-                next_rx_state   <= WAIT_END;
-                set_rx_state    <= '1';
+              --    and pkts larger than 1472 bytes (MAX_PING_SIZE)
+              if (rx_in.data.data_in /= C_ICMP_TYPE_08) or (rx_data_length > MAX_PING_SIZE) then
+                rx_count_mode     <= RST;
+                next_rx_state     <= WAIT_END;
+                set_rx_state      <= '1';
+
+                if (rx_in.data.data_in /= C_ICMP_TYPE_08) then
+                  set_pkt_type_err  <= '1';
+                end if;
+                if (rx_data_length > MAX_PING_SIZE) then
+                  set_pkt_size_err  <= '1'; -- rise pkt_size error
+                end if;
+
               else
-                rx_count_mode   <= INCR;
-                next_rx_state   <= ICMP_HEADER;
-                set_rx_state    <= '1';
+                  rx_count_mode   <= INCR;
+                  next_rx_state   <= ICMP_HEADER;
+                  set_rx_state    <= '1';
               end if;
 
-            else                                    -- non ICMP protocol - ignore this pkt
-
+            -- not ICMP protocol - ignore this pkt
+            else
               next_rx_state   <= WAIT_END;
               set_rx_state    <= '1';
             end if;
@@ -334,44 +409,45 @@ begin
       when ICMP_HEADER =>
         case rx_event is
           when NO_EVENT =>              -- (nothing to do)
-          when DATA =>
-            if rx_count = to_unsigned(ICMP_HEADER_LENGTH-1,16) then       -- 7
+          when DATA     =>
+            if rx_count = to_unsigned(C_ICMP_HEADER_LENGTH-1,16) then       -- 7
               rx_count_mode   <= SET_VAL; -- rx_count restarts at 1
               next_rx_state   <= USER_DATA;
               set_rx_state    <= '1';
-              set_pkt_cnt     <= INCR; -- count another pkt received
+              set_pkt_cnt     <= '1'; -- INCR; -- count another pkt received
             else
               rx_count_mode   <= INCR;
               next_rx_state   <= ICMP_HEADER;
             end if;
 
             -- handle early frame termination
-            if ip_rx.data.data_in_last = '1' then
+            if rx_in.data.data_in_last = '1' then
               next_rx_state   <= IDLE;
               set_rx_state    <= '1';
             else
               case rx_count is
                 -- ICMP header
                 when x"0001" => -- ignore pkts that are not ICMP Code 00 (Echo Request)
-                                if (ip_rx.data.data_in /= ICMP_CODE_00) then
-                                  rx_count_mode   <= RST;
-                                  next_rx_state   <= WAIT_END;
-                                  set_rx_state    <= '1';
+                                if (rx_in.data.data_in /= C_ICMP_CODE_00) then
+                                  rx_count_mode     <= RST;
+                                  next_rx_state     <= WAIT_END;
+                                  set_rx_state      <= '1';
+                                  set_pkt_type_err  <= '1';  -- rise pkt_type error
                                 else
                                   set_src_ip <= '1';  -- capture ip_rx header
                                 end if;
 
-                when x"0002" => -- ignore checksum
-                when x"0003" => -- ignore checksum
+                when x"0002" => set_checksum_H    <= '1'; -- capture ICMP header checksum field msb
+                when x"0003" => set_checksum_L    <= '1';   -- capture ICMP header checksum field lsb
+                when x"0004" => set_identifier_H  <= '1'; -- capture ICMP header Identificier field msb
+                when x"0005" => set_identifier_L  <= '1'; -- capture ICMP header Identificier field lsb
+                when x"0006" => set_seq_number_H  <= '1'; -- capture ICMP header Sequence_number field msb
+                when x"0007" => set_seq_number_L  <= '1'; -- capture ICMP header Sequence_number field lsb
 
-                when x"0004" => set_identifier_H <= '1';    -- capture ICMP header Identificier field msb
-                when x"0005" => set_identifier_L <= '1';    -- capture ICMP header Identificier field lsb
-                when x"0006" => set_seq_number_H <= '1';    -- capture ICMP header Sequence_number field msb
-                when x"0007" => set_seq_number_L <= '1';    -- capture ICMP header Sequence_number field lsb
-
-                                -- we have an ICMP Echo Request (Type 08)
-                                set_echo_request <= '1';
-
+                                set_echo_request  <= '1'; -- we have an ICMP Echo Request (Type 08)
+                                                          -- do not need to wait last data to send the Ping response s
+                                                          -- since the Ping response checksum only differs of 2048 (x"0800")
+                                                          -- from the incoming Ping request checksum
 
                 when others =>  -- ignore other bytes in ICMP header
               end case;
@@ -381,7 +457,7 @@ begin
       when USER_DATA =>
         case rx_event is
           when NO_EVENT =>              -- (nothing to do)
-              -- check for early frame termination  ///// TGA
+              -- check for early frame termination  ??? TODO (TGA)
               -- TODO need to mark frame as errored
               next_rx_state   <= IDLE;
               set_rx_state    <= '1';
@@ -391,7 +467,7 @@ begin
             if rx_count = (rx_data_length) then     -- end of ip_rx frame
               rx_count_mode <= RST;
 
-              if ip_rx.data.data_in_last = '1' then
+              if rx_in.data.data_in_last = '1' then
                 next_rx_state <= IDLE;
                 set_rx_state  <= '1';
               else
@@ -403,16 +479,15 @@ begin
               rx_count_mode <= INCR;
               -- check for early frame termination
               -- TODO need to mark frame as errored
-              if ip_rx.data.data_in_last = '1' then
+              if rx_in.data.data_in_last = '1' then
                 next_rx_state <= IDLE;
                 set_rx_state  <= '1';
               end if;
             end if;
         end case;
 
-
       when ERR =>
-        if ip_rx.data.data_in_last = '0' then
+        if rx_in.data.data_in_last = '0' then
           next_rx_state <= WAIT_END;
           set_rx_state    <= '1';
         else
@@ -420,36 +495,41 @@ begin
           set_rx_state    <= '1';
         end if;
 
-
       when WAIT_END =>
         case rx_event is
           when NO_EVENT =>              -- (nothing to do)
-          when DATA =>
-            if ip_rx.data.data_in_last = '1' then
+          when DATA     =>
+            if rx_in.data.data_in_last = '1' then
               next_rx_state   <= IDLE;
               set_rx_state    <= '1';
+              reset_pkt_err   <= '1';
             end if;
         end case; -- rx_event
 
     end case; -- rx_state;
-  end process rx_combinatorial;
+  end process rx_comb_proc;
 
 
   -----------------------------------------------------------------------------------
+  -- Process: rx_seq_proc
   -- RX sequential process to action control signals and change states and outputs
   -----------------------------------------------------------------------------------
-  rx_sequential : process(clk)
+  rx_seq_proc : process(clk)
   begin
     if rising_edge(clk) then
       if reset = '1' then
         -- reset state variables
         rx_state            <= IDLE;
         rx_count            <= x"0000";
-        rx_pkt_counter      <= x"00";
-        ip_tx_start_reg     <= '0';
-        icmp_echo_request   <= '0';
+        rx_pkt_count        <= (others=>'0');
+        rx_pkt_err_reg      <= '0';
+        rx_pkt_err_count    <= (others=>'0');
 
-        icmp_rx_header      <= ICMP_HEADER_ZERO;
+        ip_tx_start_reg     <= '0';
+
+        icmp_echo_request   <= '0';
+        icmp_rx_header      <= C_ICMP_HEADER_NULL;
+        icmp_reply_checksum <= x"0000";
 
       else
         icmp_echo_request <= set_echo_request;
@@ -459,12 +539,13 @@ begin
         else
           rx_state <= rx_state;
         end if;
+
         -- rx_count processing
         case rx_count_mode is
-          when RST     => rx_count <= x"0000";      -- reset
-          when SET_VAL => rx_count <= x"0001";      -- set
-          when INCR    => rx_count <= rx_count + 1; -- increment
-          when HOLD    => rx_count <= rx_count;     -- no change
+          when RST     => rx_count <= x"0000";
+          when SET_VAL => rx_count <= x"0001";
+          when INCR    => rx_count <= rx_count + 1;
+          when HOLD    => rx_count <= rx_count;
         end case;
 
         -- ip_tx_start_reg processing
@@ -474,43 +555,133 @@ begin
           when HOLD => ip_tx_start_reg <= ip_tx_start_reg;
         end case;
 
-        -- icmp pkt processing
-        case set_pkt_cnt is
-          when RST  => rx_pkt_counter <= x"00";
-          when INCR => rx_pkt_counter <= rx_pkt_counter + 1;
-          when HOLD => rx_pkt_counter <= rx_pkt_counter;
-        end case;
+        -- pkt_count processing
+        if set_pkt_cnt = '1' then
+          rx_pkt_count <= rx_pkt_count + 1;
+        end if;
 
+        -- pkt_err_count processing
+        if (set_pkt_type_err = '1' or set_pkt_size_err = '1') then
+          rx_pkt_err_reg    <= '1';
+          rx_pkt_err_count  <= rx_pkt_err_count + 1;
+        elsif reset_pkt_err = '1' then
+          rx_pkt_err_reg    <= '0';
+          rx_pkt_err_count  <= rx_pkt_err_count; -- no change
+        end if;
 
         -----------------------------------------------------------------
         -- Populate icmp_rx header to prepare Echo Reply response
         -----------------------------------------------------------------
         if (set_src_ip = '1') then
-          icmp_rx_header.src_ip_addr  <= ip_rx.hdr.src_ip_addr; -- capture src_IP address from ip_rx header
-          icmp_rx_header.data_length  <= ip_rx.hdr.data_length; -- capture data_length    from ip_rx header
-          icmp_rx_header.msg_type     <= ICMP_TYPE_00;          -- Echo Reply Type 00 Code 00
-          icmp_rx_header.msg_code     <= ICMP_CODE_00;
-          icmp_rx_header.checksum     <= x"AA55";               -- checksum will be computed by ipv4_tx module (use only for TEST)
+          icmp_rx_header.src_ip_addr  <= rx_in.hdr.src_ip_addr; -- capture src_IP address from ip_rx header
+          icmp_rx_header.data_length  <= rx_in.hdr.data_length; -- capture data_length    from ip_rx header
+          icmp_rx_header.msg_type     <= C_ICMP_TYPE_00;          -- Echo Reply Type 00 Code 00
+          icmp_rx_header.msg_code     <= C_ICMP_CODE_00;
         end if;
 
+        -- capture ICMP header checksum
+        if (set_checksum_H = '1') then
+          icmp_rx_header.checksum(15 downto 8)  <= rx_in.data.data_in;
+        end if;
+        if (set_checksum_L = '1') then
+          icmp_rx_header.checksum(7 downto 0)   <= rx_in.data.data_in;
+        end if;
         -- capture ICMP header fields :
         if (set_identifier_H = '1') then
-          icmp_rx_header.identifier(15 downto 8)  <= ip_rx.data.data_in;
+          icmp_rx_header.identifier(15 downto 8)  <= rx_in.data.data_in;
         end if;
         if (set_identifier_L = '1') then
-          icmp_rx_header.identifier(7 downto 0)   <= ip_rx.data.data_in;
+          icmp_rx_header.identifier(7 downto 0)   <= rx_in.data.data_in;
         end if;
         if (set_seq_number_H = '1') then
-          icmp_rx_header.seq_number(15 downto 8)  <= ip_rx.data.data_in;
+          icmp_rx_header.seq_number(15 downto 8)  <= rx_in.data.data_in;
         end if;
         if (set_seq_number_L = '1') then
-          icmp_rx_header.seq_number(7 downto 0)   <= ip_rx.data.data_in;
+          icmp_rx_header.seq_number(7 downto 0)   <= rx_in.data.data_in;
         end if;
 
+        -- Compute ICMP Echo Reply (Ping response) checksum
+        -- Since the ICMP header Type field changes from x"08" for a Ping request to x"00
+        -- for a Ping response, the Ping response is indeed supposed to be different by 0x0800.
+
+        icmp_reply_checksum <= std_logic_vector( unsigned(icmp_rx_header.checksum) + unsigned(icmp_checksum_offset));
 
       end if; -- reset
     end if; -- clk
-  end process rx_sequential;
+  end process rx_seq_proc;
+
+
+
+  ------------------------------------------------------------------------------
+  -- Process: rx_ram_wr_proc
+  -- Description : write into memory array when receiving ICMP Echo Request data
+  ------------------------------------------------------------------------------
+  rx_ram_wr_proc : process(clk)
+  begin
+    if rising_edge(clk) then
+      -- No Reset so Vivado synthesis tool can infer Distributed RAM
+      if rx_state = USER_DATA then
+        icmp_rx_data_array(to_integer(rx_count)) <= rx_in.data.data_in;
+      end if;
+    end if;
+  end process rx_ram_wr_proc;
+
+  ------------------------------------------------------------------------------
+  -- Process: rx_ram_rd_proc
+  -- Description : read into memory array when sending Echo Reply data
+  ------------------------------------------------------------------------------
+  rx_ram_rd_proc : process(clk)
+  begin
+    if rising_edge(clk) then
+      if reset = '1' then
+        tx_data_out   <= x"00";
+        tx_data_valid <= '0';
+        tx_data_last  <= '0';
+      else
+        tx_data_last  <= '0'; -- default value
+        tx_data_valid <= '0'; -- default value
+
+        -- ICMP Echo Reply : read rx_data_array when ip_tx is ready to accept data
+        if ip_tx_data_out_ready = '1' then
+
+          case tx_state is
+            when SEND_ICMP_HEADER =>
+              tx_data_valid <= '1';
+              case tx_count is
+                when x"0000" => tx_data_out <= C_ICMP_TYPE_00; -- Echo Reply Type 00 Code 00
+                when x"0001" => tx_data_out <= C_ICMP_CODE_00;
+                when x"0002" => tx_data_out <= icmp_reply_checksum(15 downto 8);
+                when x"0003" => tx_data_out <= icmp_reply_checksum( 7 downto 0);
+                when x"0004" => tx_data_out <= icmp_rx_header.identifier(15 downto 8);
+                when x"0005" => tx_data_out <= icmp_rx_header.identifier( 7 downto 0);
+                when x"0006" => tx_data_out <= icmp_rx_header.seq_number(15 downto 8);
+                when x"0007" => tx_data_out <= icmp_rx_header.seq_number( 7 downto 0);
+                when others =>
+                  -- shouldnt get here - handle as error
+              end case;
+
+            when SEND_USER_DATA =>
+              tx_data_valid <= '1';
+              tx_data_out <= icmp_rx_data_array(to_integer(tx_count)); --read rx memory array
+              if tx_count = unsigned(rx_data_length) then
+                tx_data_last <= '1';
+              end if;
+            when others =>
+          end case;
+        else -- ip_tx_data_out_ready = 0
+          tx_data_valid <= '0';
+        end if;
+
+      end if; -- reset
+    end if; -- clk
+  end process rx_ram_rd_proc;
+
+  -----------------------
+  -- IP_TX data output --
+  -----------------------
+  ip_tx_data.data_out       <= tx_data_out;
+  ip_tx_data.data_out_valid <= tx_data_valid;
+  ip_tx_data.data_out_last  <= tx_data_last;
 
 
   -- ***************************************************************************
@@ -518,28 +689,26 @@ begin
   -- ***************************************************************************
   icmp_echo_reply <= icmp_echo_request;
 
-
-
-  tx_combinatorial : process (
+  ------------------------------------------------------------------------------
+  -- Process: tx_comb_proc
+  -- TX combinatorial process to implement FSM and determine control signals
+  ------------------------------------------------------------------------------
+  tx_comb_proc : process (
     -- input signals
-    icmp_echo_reply, ip_tx_result, ip_tx_data_out_ready,
+    icmp_echo_reply, icmp_rx_header, ip_tx_result, ip_tx_data_out_ready,
     -- state variables
     tx_state, tx_count, ip_tx_start_reg,
     -- control signals
-    next_tx_state, set_tx_state, tx_count_mode, tx_data,
+    next_tx_state, set_tx_state, tx_count_mode,
     rx_data_length, set_ip_tx_start
     )
     begin
 
       -- set signal defaults
-      next_tx_state       <= IDLE;
+      next_tx_state       <= IDLE;    -- prevent from infering a latch
       set_tx_state        <= '0';
       tx_count_mode       <= HOLD;
       set_ip_tx_start     <= HOLD;
-
-      --tx_data.data_out        <= x"00";
-      tx_data.data_out_valid  <= '0';
-      tx_data.data_out_last   <= '0';
 
       -- TX_FSM combinatorial
       case tx_state is
@@ -553,7 +722,6 @@ begin
         -- wait until we have received en ICMP Echo Request (ping)
         if icmp_echo_reply = '1' then
             -- start to send UDP header
-            tx_count_mode   <= RST;
             next_tx_state   <= PAUSE;
             set_tx_state    <= '1';
             set_ip_tx_start <= SET;
@@ -565,8 +733,7 @@ begin
       when PAUSE =>
         -- delay one clock for IP layer to respond to ip_tx_start and remove any tx error result
 
-        if ip_tx_data_out_ready = '1' then        -- TODO check validity
-
+        if ip_tx_data_out_ready = '1' then
           next_tx_state <= SEND_ICMP_HEADER;
           set_tx_state <= '1';
         end if;
@@ -577,17 +744,15 @@ begin
       when SEND_ICMP_HEADER =>
 
         if ip_tx_result = IPTX_RESULT_ERR then        -- 0x10
-          ---+++tx_data.data_out_valid <= '0';
           set_ip_tx_start <= CLR;
           next_tx_state   <= IDLE;
           set_tx_state    <= '1';
         else
           -- wait until ip tx is ready to accept data
           if ip_tx_data_out_ready = '1' then
-            tx_data.data_out_valid <= '1';
 
-            if tx_count = to_unsigned(ICMP_HEADER_LENGTH-1,16) then       -- 7
-              tx_count_mode <= RST;    --   /// SET_VAL
+            if tx_count = to_unsigned(C_ICMP_HEADER_LENGTH-1,16) then       -- 7
+              tx_count_mode <= SET_VAL;
               next_tx_state <= SEND_USER_DATA;
               set_tx_state  <= '1';
             else
@@ -595,43 +760,29 @@ begin
               next_tx_state <= SEND_ICMP_HEADER;
             end if;
 
-            case tx_count is
-              when x"0000" => tx_data.data_out <= ICMP_TYPE_00; -- Echo Reply Type 00 Code 00
-              when x"0001" => tx_data.data_out <= ICMP_CODE_00;
-              when x"0002" => tx_data.data_out <= icmp_rx_header.checksum(15 downto 8);
-              when x"0003" => tx_data.data_out <= icmp_rx_header.checksum( 7 downto 0);
-              when x"0004" => tx_data.data_out <= icmp_rx_header.identifier(15 downto 8);
-              when x"0005" => tx_data.data_out <= icmp_rx_header.identifier( 7 downto 0);
-              when x"0006" => tx_data.data_out <= icmp_rx_header.seq_number(15 downto 8);
-              when x"0007" => tx_data.data_out <= icmp_rx_header.seq_number( 7 downto 0);
-              when others =>
-                -- shouldnt get here - handle as error
-            end case;
           else
             -- IP Tx not ready to accept data
-            ---+++tx_data.data_out_valid <= '0';
             next_tx_state <= SEND_ICMP_HEADER;
             tx_count_mode <= HOLD;
           end if;
-        end if; -- ip_tx_result /= IPTX_RESULT_ERR and ip_tx_data_out_ready = '1'
+        end if; -- ip_tx_result
 
       ---------------------
       -- SEND USER DATA
       ---------------------
-      when SEND_USER_DATA =>      -- Send dummy data (not the same as Echo Request input frame)
+      when SEND_USER_DATA =>      -- Send the same as Echo Request input frame
+
+        -- In this state tx_count counts from 1 to rx_data_length
 
         -- wait until ip tx is ready to accept data
         if ip_tx_data_out_ready = '1' then
-          tx_data.data_out_valid <= '1';
-          tx_data.data_out       <= std_logic_vector(tx_count(7 downto 0));  -- Send dummy data /// TODO replace by 0 ??
 
-          if tx_count = unsigned(rx_data_length)-1 then
+          if tx_count = unsigned(rx_data_length) then       -- +++ 13.04
             -- TX terminated due to count - end normally
-            tx_count_mode   <= RST;
-            next_tx_state   <= IDLE;
-            set_tx_state    <= '1';
-            tx_data.data_out_last    <= '1';
-            set_ip_tx_start <= CLR;
+            tx_count_mode         <= RST;
+            next_tx_state         <= IDLE;
+            set_tx_state          <= '1';
+            set_ip_tx_start       <= CLR;
           else
             -- TX continues
             tx_count_mode   <= INCR;
@@ -640,19 +791,19 @@ begin
 
         else
           -- IP Tx not ready to accept data
-          ---++++tx_data.data_out_valid <= '0';
           next_tx_state <= SEND_USER_DATA;
           tx_count_mode <= HOLD;
         end if;
 
       end case; -- tx_state
-  end process tx_combinatorial;
+  end process tx_comb_proc;
 
 
   -----------------------------------------------------------------------------------
+  -- Process: tx_seq_proc
   -- TX sequential process to action control signals and change states and outputs
   -----------------------------------------------------------------------------------
-  tx_sequential : process(clk)
+  tx_seq_proc : process(clk)
   begin
     if rising_edge(clk) then
       if reset = '1' then
@@ -660,14 +811,8 @@ begin
         tx_state        <= IDLE;
         tx_count        <= (others=>'0');
         ip_tx_start_reg <= '0';
-        ---
-        ip_tx_header.protocol      <= ICMP_PROTOCOL; -- 0x01
-        ip_tx_header.data_length   <= (others=>'0');
-        ip_tx_header.dst_ip_addr   <= (others=>'0');
-        --
-        ip_tx_data.data_out       <= (others=>'0');
-        ip_tx_data.data_out_valid <= '0';
-        ip_tx_data.data_out_last  <= '0';
+        ip_tx_header    <= C_IPV4_TX_HEADER_NULL;
+
       else
         -- Next tx_state processing
         if set_tx_state = '1' then
@@ -677,9 +822,9 @@ begin
         end if;
         -- tx_count processing
         case tx_count_mode is
-          when RST     => tx_count <= x"0000";      -- reset
-          when SET_VAL => tx_count <= x"0001";      -- set_value
-          when INCR    => tx_count <= tx_count + 1; -- increment
+          when RST     => tx_count <= x"0000";
+          when SET_VAL => tx_count <= x"0001";
+          when INCR    => tx_count <= tx_count + 1;
           when HOLD    => tx_count <= tx_count;     -- no change
         end case;
         -- ip_tx_start_reg processing
@@ -688,33 +833,29 @@ begin
           when CLR  => ip_tx_start_reg <= '0';
           when HOLD => ip_tx_start_reg <= ip_tx_start_reg; -- no change
         end case;
-        -- ip_tx header
+        -------------------------
+        -- IP_TX header output --
+        -------------------------
         if icmp_echo_reply = '1' then
-          ip_tx_header.protocol      <= ICMP_PROTOCOL;
+          ip_tx_header.protocol      <= C_ICMP_PROTOCOL;  -- x"01"
           ip_tx_header.data_length   <= icmp_rx_header.data_length;
           ip_tx_header.dst_ip_addr   <= icmp_rx_header.src_ip_addr;
         end if;
-        -- ip_tx_data output
-        ip_tx_data.data_out       <= tx_data.data_out;
-        ip_tx_data.data_out_valid <= tx_data.data_out_valid ; --- and ip_tx_data_out_ready;
-        ip_tx_data.data_out_last  <= tx_data.data_out_last;
 
       end if; -- reset
     end if; -- clk
-  end process tx_sequential;
-
-  --ip_tx_s.data.data_out_valid <= tx_data.data_out_valid and ip_tx_data_out_ready;
-
+  end process tx_seq_proc;
 
   ----------------------------------------
   -- outputs followers assignements
   --------------------------------------
-  ip_tx_start     <= ip_tx_start_reg;
-  ip_tx.hdr       <= ip_tx_header;
-  ip_tx.data      <= ip_tx_data;
+  ip_tx_start         <= ip_tx_start_reg;
+  ip_tx.hdr           <= ip_tx_header;
+  ip_tx.data          <= ip_tx_data;
 
-  icmp_pkt_count  <= std_logic_vector(rx_pkt_counter);
-
+  icmp_pkt_count      <= std_logic_vector(rx_pkt_count);
+  icmp_pkt_err_count  <= std_logic_vector(rx_pkt_err_count);
+  icmp_pkt_err        <= rx_pkt_err_reg;
 
 
 end behavioral;

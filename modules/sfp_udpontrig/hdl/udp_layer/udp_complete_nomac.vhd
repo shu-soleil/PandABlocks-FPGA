@@ -52,37 +52,37 @@ entity udp_complete_nomac is
     MAX_ARP_ENTRIES         : integer := 255          -- max entries in the ARP store
   );
   port (
-    -- UDP TX signals
-    udp_tx_start            : in  std_logic;                    -- indicates req to tx UDP
-    udp_txi                 : in  udp_tx_type;                  -- UDP tx cxns
-    udp_tx_result           : out std_logic_vector(1 downto 0); -- tx status (changes during transmission)
-    udp_tx_data_out_ready   : out std_logic;                    -- indicates udp_tx is ready to take data
-    -- UDP RX signals
-    udp_rx_start            : out std_logic;                    -- indicates receipt of udp header
-    udp_rxo                 : out udp_rx_type;
-    -- IP RX signals
-    ip_rx_hdr               : out ipv4_rx_header_type;
-    -- system signals
+    -- system signals (in)
     rx_clk                  : in  std_logic;
     tx_clk                  : in  std_logic;
     reset                   : in  std_logic;
     our_ip_address          : in  std_logic_vector (31 downto 0);
     our_mac_address         : in  std_logic_vector(47 downto 0);
     control                 : in udp_control_type;
-    -- status signals
+    -- status signals (out)
     arp_pkt_count           : out std_logic_vector(7 downto 0);   -- count of arp pkts received
     ip_pkt_count            : out std_logic_vector(7 downto 0);   -- number of IP pkts received for us
-    -- MAC Transmitter
-    mac_tx_tdata            : out std_logic_vector(7 downto 0);  -- data byte to tx
-    mac_tx_tvalid           : out std_logic;                     -- tdata is valid
-    mac_tx_tready           : in  std_logic;                      -- mac is ready to accept data
-    mac_tx_tfirst           : out std_logic;                     -- indicates first byte of frame
-    mac_tx_tlast            : out std_logic;                     -- indicates last byte of frame
-    -- MAC Receiver
+    -- UDP TX signals (in)
+    udp_tx_start            : in  std_logic;                      -- indicates req to tx UDP
+    udp_txi                 : in  udp_tx_type;                    -- UDP tx cxns
+    udp_tx_result           : out std_logic_vector(1 downto 0);   -- tx status (changes during transmission)
+    udp_tx_data_out_ready   : out std_logic;                      -- indicates udp_tx is ready to take data
+    -- UDP RX signals (out)
+    udp_rx_start            : out std_logic;                      -- indicates receipt of udp header
+    udp_rxo                 : out udp_rx_type;
+    -- IP RX signals (out)
+    ip_rx_hdr               : out ipv4_rx_header_type;
+    -- MAC Receiver (in)
     mac_rx_tdata            : in  std_logic_vector(7 downto 0);   -- data byte received
     mac_rx_tvalid           : in  std_logic;                      -- indicates tdata is valid
-    mac_rx_tready           : out std_logic;                     -- tells mac that we are ready to take data
-    mac_rx_tlast            : in  std_logic                       -- indicates last byte of the trame
+    mac_rx_tready           : out std_logic;                      -- tells mac that we are ready to take data
+    mac_rx_tlast            : in  std_logic;                      -- indicates last byte of the trame
+    -- MAC Transmitter (out)
+    mac_tx_tdata            : out std_logic_vector(7 downto 0);   -- data byte to tx
+    mac_tx_tvalid           : out std_logic;                      -- tdata is valid
+    mac_tx_tready           : in  std_logic;                      -- mac is ready to accept data
+    mac_tx_tfirst           : out std_logic;                      -- indicates first byte of frame
+    mac_tx_tlast            : out std_logic                       -- indicates last byte of frame
   );
 end udp_complete_nomac;
 

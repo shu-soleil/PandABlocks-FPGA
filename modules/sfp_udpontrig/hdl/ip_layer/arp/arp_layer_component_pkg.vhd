@@ -2,8 +2,8 @@
 -- Company        : Synchrotron SOLEIL
 -- Project        : PandABox FPGA
 -- Design name    : sfp_udpontrig
--- Module name    : arp_v2_component_pkg.vhd
--- Purpose        : package of components declarations
+-- Module name    : arp_layer_component_pkg.vhd
+-- Purpose        : package of components declarations for ARP layer
 -- Author         : created automatically
 -- Synthesizable  : YES
 -- Language       : VHDL-93
@@ -30,7 +30,7 @@ library work;
 --==============================================================================
 -- Package Declaration
 --==============================================================================
-package arp_v2_component_pkg is
+package arp_layer_component_pkg is
 
   component arp_req
     generic (
@@ -142,14 +142,14 @@ package arp_v2_component_pkg is
       );
   end component;
 
-end arp_v2_component_pkg;
+end arp_layer_component_pkg;
 
 --==============================================================================
 -- Package Body
 --==============================================================================
-package body arp_v2_component_pkg is
+package body arp_layer_component_pkg is
 
-end package body arp_v2_component_pkg;
+end package body arp_layer_component_pkg;
 --==============================================================================
 -- Package End
 --==============================================================================

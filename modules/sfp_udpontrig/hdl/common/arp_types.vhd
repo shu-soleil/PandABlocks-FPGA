@@ -1,16 +1,33 @@
---
---    Package File Template
---
---    Purpose: This package defines supplemental types, subtypes,
---       constants, and functions
---
---   To use any of the example code shown below, uncomment the lines and modify as necessary
+--==============================================================================
+-- Company        : Synchrotron SOLEIL
+-- Project        : PandABox FPGA
+-- Design name    : sfp_udpontrig
+-- Module name    : arp_types.vhd
+-- Purpose:       : package definitions for ARP layer
+-- Author         : Thierry GARREL (ELSYS-Design)
+--                  from Opencores udp_ip_stack project tag v2.6
+-- Synthesizable  : YES
+-- Language       : VHDL-93
+--------------------------------------------------------------------------------
+-- Copyright (c) 2021 Synchrotron SOLEIL - L'Orme des Merisiers Saint-Aubin
+-- BP 48 91192 Gif-sur-Yvette Cedex  - https://www.synchrotron-soleil.fr
+--------------------------------------------------------------------------------
 --
 -- Revision 0.02 - Added type definitions (store and network) for arpv2
+--
+--------------------------------------------------------------------------------
 
+
+--==============================================================================
+-- Libraries Declaration
+--==============================================================================
 library IEEE;
-use IEEE.STD_LOGIC_1164.all;
+  use IEEE.std_logic_1164.all;
 
+
+--==============================================================================
+-- Package Declaration
+--==============================================================================
 package arp_types is
 
   -- arp lookup types
@@ -78,3 +95,7 @@ package arp_types is
 
 
 end arp_types;
+--==============================================================================
+-- Package End
+--==============================================================================
+

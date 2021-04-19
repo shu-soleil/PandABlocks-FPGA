@@ -1,9 +1,9 @@
 --==============================================================================
 -- Company        : Synchrotron SOLEIL
 -- Project        : PandABox FPGA
--- Design name    : sfp_udp_complete
--- Module name    : sfp_udp_complete_component_pkg.vhd
--- Purpose        : package of components declarations
+-- Design name    : sfp_udpontrig
+-- Module name    : sfp_udp_component_pkg.vhd
+-- Purpose        : package of components declarations for SFP_UDP layer
 -- Author         : created automatically
 -- Synthesizable  : YES
 -- Language       : VHDL-93
@@ -33,16 +33,61 @@ library work;
 --==============================================================================
 -- Package Declaration
 --==============================================================================
-package sfp_udp_complete_component_pkg is
+package sfp_udp_component_pkg is
 
-  component udp_complete_ping_nomac
+  component udp_complete_nomac
     generic (
       CLOCK_FREQ              : integer := 125000000  ; -- freq of data_in_clk -- needed to timout cntr
       ARP_TIMEOUT             : integer := 60         ; -- ARP response timeout (s)
       ARP_MAX_PKT_TMO         : integer := 5          ; -- # wrong nwk pkts received before set error
-      MAX_ARP_ENTRIES         : integer := 255        ; -- max entries in the ARP store
-      --
-      NB_TX_CHANNELS          : integer := 2            -- number of ip_tx channels (2 to C_MAX_CHANNELS)
+      MAX_ARP_ENTRIES         : integer := 255          -- max entries in the ARP store
+    );
+    port (
+      -- system signals (in)
+      rx_clk                  : in  std_logic;
+      tx_clk                  : in  std_logic;
+      reset                   : in  std_logic;
+      our_ip_address          : in  std_logic_vector (31 downto 0);
+      our_mac_address         : in  std_logic_vector(47 downto 0);
+      control                 : in udp_control_type;
+      -- status signals (out)
+      arp_pkt_count           : out std_logic_vector(7 downto 0);   -- count of arp pkts received
+      ip_pkt_count            : out std_logic_vector(7 downto 0);   -- number of IP pkts received for us
+      -- UDP TX signals (in)
+      udp_tx_start            : in  std_logic;                      -- indicates req to tx UDP
+      udp_txi                 : in  udp_tx_type;                    -- UDP tx cxns
+      udp_tx_result           : out std_logic_vector(1 downto 0);   -- tx status (changes during transmission)
+      udp_tx_data_out_ready   : out std_logic;                      -- indicates udp_tx is ready to take data
+      -- UDP RX signals (out)
+      udp_rx_start            : out std_logic;                      -- indicates receipt of udp header
+      udp_rxo                 : out udp_rx_type;
+      -- IP RX signals (out)
+      ip_rx_hdr               : out ipv4_rx_header_type;
+      -- MAC Receiver (in)
+      mac_rx_tdata            : in  std_logic_vector(7 downto 0);   -- data byte received
+      mac_rx_tvalid           : in  std_logic;                      -- indicates tdata is valid
+      mac_rx_tready           : out std_logic;                      -- tells mac that we are ready to take data
+      mac_rx_tlast            : in  std_logic;                      -- indicates last byte of the trame
+      -- MAC Transmitter (out)
+      mac_tx_tdata            : out std_logic_vector(7 downto 0);   -- data byte to tx
+      mac_tx_tvalid           : out std_logic;                      -- tdata is valid
+      mac_tx_tready           : in  std_logic;                      -- mac is ready to accept data
+      mac_tx_tfirst           : out std_logic;                      -- indicates first byte of frame
+      mac_tx_tlast            : out std_logic                       -- indicates last byte of frame
+    );
+  end component;
+
+  component udp_complete_ping_nomac
+    generic (
+      -- ARP layer
+      CLOCK_FREQ            : integer := 125000000  ; -- freq of data_in_clk -- needed to timout cntr
+      ARP_TIMEOUT           : integer := 60         ; -- ARP response timeout (s)
+      ARP_MAX_PKT_TMO       : integer := 5          ; -- # wrong nwk pkts received before set error
+      MAX_ARP_ENTRIES       : integer := 255        ; -- max entries in the ARP store
+      -- ICMP layer
+      MAX_PING_SIZE         : natural := 256        ; -- max ICMP pkt size in bytes (32 to 1472 bytes)
+      -- ip_tx_arbiratror
+      NB_TX_CHANNELS        : natural := 2            -- number of ip_tx channels (2 to C_MAX_CHANNELS)
     );
     port (
       -- System signals (in)
@@ -56,6 +101,8 @@ package sfp_udp_complete_component_pkg is
       arp_pkt_count           : out std_logic_vector(7 downto 0);   -- count of arp pkts received
       ip_pkt_count            : out std_logic_vector(7 downto 0);   -- number of IP pkts received for us
       icmp_pkt_count          : out std_logic_vector(7 downto 0);   -- number of ICMP pkts received for us
+      icmp_pkt_err            : out std_logic;                      -- indicate an errored ICMP pkt (type <> x"0800" or pkt greater than 1472 bytes)
+      icmp_pkt_err_count      : out std_logic_vector(7 downto 0);   -- number of ICMP pkts received for us
       -- UDP TX signals (in)
       udp_tx_start            : in  std_logic;                      -- indicates req to tx UDP
       udp_txi                 : in  udp_tx_type;                    -- UDP tx cxns
@@ -64,10 +111,13 @@ package sfp_udp_complete_component_pkg is
       -- UDP RX signals (out)
       udp_rx_start            : out std_logic;                      -- indicates receipt of udp header
       udp_rxo                 : out udp_rx_type;
-      -- IP RX signals (out)
-      ip_rx_start             : out std_logic;        -- DEBUG
-      ip_rx_hdr               : out ipv4_rx_header_type;
-      ip_rx_data              : out axi_in_type;     -- DEBUG
+      -- IP RX signals (out) // DEBUG
+      ip_rx_start_o           : out std_logic;        -- DEBUG
+      ip_rx_hdr_o             : out ipv4_rx_header_type;
+      ip_rx_data_o            : out axi_in_type;     -- DEBUG
+      -- IP TX status (out) // DEBUG
+      ip_tx_start_o           : out std_logic;
+      ip_tx_result_o          : out ip_tx_result_type; -- slv(1:0)
       -- MAC Receiver (in)
       mac_rx_tdata            : in  std_logic_vector(7 downto 0);   -- data byte received
       mac_rx_tvalid           : in  std_logic;                      -- indicates tdata is valid
@@ -229,14 +279,14 @@ package sfp_udp_complete_component_pkg is
   );
   end component;
 
-end sfp_udp_complete_component_pkg;
+end sfp_udp_component_pkg;
 
 --==============================================================================
 -- Package Body
 --==============================================================================
-package body sfp_udp_complete_component_pkg is
+package body sfp_udp_component_pkg is
 
-end package body sfp_udp_complete_component_pkg;
+end package body sfp_udp_component_pkg;
 --==============================================================================
 -- Package End
 --==============================================================================

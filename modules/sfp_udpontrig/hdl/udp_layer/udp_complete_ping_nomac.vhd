@@ -13,6 +13,8 @@
 -- Copyright (c) 2021 Synchrotron SOLEIL - L'Orme des Merisiers Saint-Aubin
 -- BP 48 91192 Gif-sur-Yvette Cedex  - https://www.synchrotron-soleil.fr
 --------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
 -- Design Architecture
 -- ===================
 --                                                          +---------------------+
@@ -59,16 +61,19 @@ library work;
 
 
 --==============================================================================
--- Entiy Declaration
+-- Entity Declaration
 --==============================================================================
 entity udp_complete_ping_nomac is
   generic (
-    CLOCK_FREQ              : integer := 125000000  ; -- freq of data_in_clk -- needed to timout cntr
-    ARP_TIMEOUT             : integer := 60         ; -- ARP response timeout (s)
-    ARP_MAX_PKT_TMO         : integer := 5          ; -- # wrong nwk pkts received before set error
-    MAX_ARP_ENTRIES         : integer := 255        ; -- max entries in the ARP store
-    --
-    NB_TX_CHANNELS          : integer := 2            -- number of ip_tx channels (2 to C_MAX_CHANNELS)
+    -- ARP layer
+    CLOCK_FREQ            : integer := 125000000  ; -- freq of data_in_clk -- needed to timout cntr
+    ARP_TIMEOUT           : integer := 60         ; -- ARP response timeout (s)
+    ARP_MAX_PKT_TMO       : integer := 5          ; -- # wrong nwk pkts received before set error
+    MAX_ARP_ENTRIES       : integer := 255        ; -- max entries in the ARP store
+    -- ICMP layer
+    MAX_PING_SIZE         : natural := 256        ; -- max ICMP pkt size in bytes (32 to 1472 bytes)
+    -- ip_tx_arbiratror
+    NB_TX_CHANNELS        : natural := 2            -- number of ip_tx channels (2 to C_MAX_CHANNELS)
   );
   port (
     -- System signals (in)
@@ -82,6 +87,8 @@ entity udp_complete_ping_nomac is
     arp_pkt_count           : out std_logic_vector(7 downto 0);   -- count of arp pkts received
     ip_pkt_count            : out std_logic_vector(7 downto 0);   -- number of IP pkts received for us
     icmp_pkt_count          : out std_logic_vector(7 downto 0);   -- number of ICMP pkts received for us
+    icmp_pkt_err            : out std_logic;                      -- indicate an errored ICMP pkt (type <> x"0800" or pkt greater than 1472 bytes)
+    icmp_pkt_err_count      : out std_logic_vector(7 downto 0);   -- number of ICMP pkts received for us
     -- UDP TX signals (in)
     udp_tx_start            : in  std_logic;                      -- indicates req to tx UDP
     udp_txi                 : in  udp_tx_type;                    -- UDP tx cxns
@@ -90,10 +97,13 @@ entity udp_complete_ping_nomac is
     -- UDP RX signals (out)
     udp_rx_start            : out std_logic;                      -- indicates receipt of udp header
     udp_rxo                 : out udp_rx_type;
-    -- IP RX signals (out)
-    ip_rx_start             : out std_logic;        -- DEBUG
-    ip_rx_hdr               : out ipv4_rx_header_type;
-    ip_rx_data              : out axi_in_type;     -- DEBUG
+    -- IP RX signals (out) // DEBUG
+    ip_rx_start_o           : out std_logic;        -- DEBUG
+    ip_rx_hdr_o             : out ipv4_rx_header_type;
+    ip_rx_data_o            : out axi_in_type;     -- DEBUG
+    -- IP TX status (out) // DEBUG
+    ip_tx_start_o           : out std_logic;
+    ip_tx_result_o          : out ip_tx_result_type; -- slv(1:0)
     -- MAC Receiver (in)
     mac_rx_tdata            : in  std_logic_vector(7 downto 0);   -- data byte received
     mac_rx_tvalid           : in  std_logic;                      -- indicates tdata is valid
@@ -140,7 +150,7 @@ architecture structural of udp_complete_ping_nomac is
   -- IP TX connectivity
   signal ip_tx_start_int            : std_logic;
   signal ip_tx_int                  : ipv4_tx_type;
-  signal ip_tx_result_int           : std_logic_vector(1 downto 0);
+  signal ip_tx_result_int           : ip_tx_result_type; --- std_logic_vector(1 downto 0);
   signal ip_tx_data_out_ready_int   : std_logic;
 
 
@@ -149,10 +159,6 @@ architecture structural of udp_complete_ping_nomac is
 --==============================================================================
 begin
 
-  -- output followers
-  ip_rx_start   <= ip_rx_start_int; -- DEBUG
-  ip_rx_hdr     <= ip_rx_int.hdr;
-  ip_rx_data    <= ip_rx_int.data;  -- DEBUG
 
   -- ***************************************************************************
   --                  Instantiate the UDP layer
@@ -198,15 +204,20 @@ begin
   -- Instantiate the UDP_PING block --
   ------------------------------------
   udp_ping_inst : udp_ping
+  generic map (
+    MAX_PING_SIZE               => MAX_PING_SIZE
+  )
   port map (
     -- system signals (in)
     clk                         => rx_clk,
     reset                       => reset,
     -- IP layer RX signals (in)
-    ip_rx_start                 => ip_rx_start_int,             -- in
-    ip_rx                       => ip_rx_int,                   -- in
-    -- status signals
-    icmp_pkt_count              => icmp_pkt_count,              -- out
+    ip_rx_start                 => ip_rx_start_int,
+    ip_rx                       => ip_rx_int,
+    -- status signals (out)
+    icmp_pkt_count              => icmp_pkt_count,
+    icmp_pkt_err                => icmp_pkt_err,
+    icmp_pkt_err_count          => icmp_pkt_err_count,
     -- IP layer TX signals (out)
     ip_tx_start                 => ip_tx_start_bus(1),          -- out to ip_tx_arbitrator
     ip_tx                       => ip_tx_bus(1),                -- out to ip_tx_arbitrator
@@ -224,7 +235,7 @@ begin
   ----------------------------------------
   ip_tx_arbitrator_inst : ip_tx_arbitrator
   generic map (
-    NB_CHANNELS       => NB_TX_CHANNELS
+    NB_CHANNELS                 => NB_TX_CHANNELS
   )
   port map (
     -- System signals (in)
@@ -287,7 +298,15 @@ begin
   );
 
 
+  ------------------------------
+  -- outputs followers
+  ------------------------------
+  ip_rx_start_o   <= ip_rx_start_int;
+  ip_rx_hdr_o     <= ip_rx_int.hdr;
+  ip_rx_data_o    <= ip_rx_int.data;
 
+  ip_tx_start_o   <= ip_tx_start_int;
+  ip_tx_result_o  <= ip_tx_result_int;
 
 end structural;
 --==============================================================================

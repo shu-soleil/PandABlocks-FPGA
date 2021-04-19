@@ -3,7 +3,7 @@
 -- Project        : PandABox FPGA
 -- Design name    : sfp_udpontrig
 -- Module name    : udp_layer_component_pkg.vhd
--- Purpose        : package of components declarations
+-- Purpose        : package of components declarations for UDP layer
 -- Author         : created automatically
 -- Synthesizable  : YES
 -- Language       : VHDL-93
@@ -100,6 +100,33 @@ package udp_layer_component_pkg is
     );
   end component;
 
+  component udp_ping
+    generic (
+      -- Limit the amount of logic cells used to store ICMP optional data (synthesis only)
+      -- Windows ping issues 32 bytes of ICMP data by default
+      -- Linux   ping issues 64 bytes of ICMP data by default (8 bytes of header & 56 bytes of optional data)
+      -- Theoritical max ping size with non fragmented IPv4 frames is 1472 bytes, ie 1500 - 20 (Ipv4 header) -8 (icmp header)
+      MAX_PING_SIZE         : natural := 1024  -- 256                    -- Maximum pkt size. Larger echo requests will be ignored. (max 1472)
+    );
+    port (
+      -- System signals (in)
+      clk                   : in  std_logic;                      -- asynchronous clock
+      reset                 : in  std_logic;                      -- synchronous active high reset input
+      -- IP layer RX signals (in)
+      ip_rx_start           : in  std_logic;                      -- indicates receipt of ip frame
+      ip_rx                 : in  ipv4_rx_type;                   -- IP rx cxns
+      -- status signals (out)
+      icmp_pkt_count        : out std_logic_vector(7 downto 0);   -- number of ICMP pkts received for us
+      icmp_pkt_err          : out std_logic;                      -- indicate an errored ICMP pkt (type <> x"0800" or pkt greater than 1472 bytes)
+      icmp_pkt_err_count    : out std_logic_vector(7 downto 0);   -- number of errored ICMP pkts received for us
+      -- IP layer TX signals (out)
+      ip_tx_start           : out  std_logic;
+      ip_tx                 : out ipv4_tx_type;                   -- IP tx cxns
+      ip_tx_result          : in  std_logic_vector(1 downto 0);   -- tx status (changes during transmission)
+      ip_tx_data_out_ready  : in  std_logic                       -- indicates IP TX is ready to take data
+      );
+  end component;
+
   component udp_tx
     port (
       -- system signals (in)
@@ -129,24 +156,6 @@ package udp_layer_component_pkg is
       -- UDP Layer signals (out)
       udp_rx_start    : out std_logic;       -- indicates receipt of udp header
       udp_rxo         : out udp_rx_type
-      );
-  end component;
-
-  component udp_ping
-    port (
-      -- System signals (in)
-      clk                   : in  std_logic;                      -- asynchronous clock
-      reset                 : in  std_logic;                      -- synchronous active high reset input
-      -- IP layer RX signals (in)
-      ip_rx_start           : in  std_logic;                      -- indicates receipt of ip frame
-      ip_rx                 : in  ipv4_rx_type;                   -- IP rx cxns
-      -- status signals
-      icmp_pkt_count        : out std_logic_vector(7 downto 0);   -- number of ICMP pkts received for us
-      -- IP layer TX signals (out)
-      ip_tx_start           : out  std_logic;
-      ip_tx                 : out ipv4_tx_type;                   -- IP tx cxns
-      ip_tx_result          : in  std_logic_vector(1 downto 0);   -- tx status (changes during transmission)
-      ip_tx_data_out_ready  : in  std_logic                       -- indicates IP TX is ready to take data
       );
   end component;
 

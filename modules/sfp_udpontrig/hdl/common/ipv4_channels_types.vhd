@@ -48,9 +48,12 @@ package ipv4_channels_types is
     --------------------------------------
     -- Maximum number of IP TX channels --
     --------------------------------------
-    constant C_MAX_CHANNELS       : integer := 8;
-    constant C_LOG2_MAX_CHANNELS  : integer := integer(ceil(log2(real(C_MAX_CHANNELS))));
+    constant C_MAX_CHANNELS       : natural := 8;
+    constant C_LOG2_MAX_CHANNELS  : natural := natural(ceil(log2(real(C_MAX_CHANNELS))));
 
 
 
 end ipv4_channels_types;
+--==============================================================================
+-- Package End
+--==============================================================================

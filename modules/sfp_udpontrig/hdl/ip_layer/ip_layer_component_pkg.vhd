@@ -3,7 +3,7 @@
 -- Project        : PandABox FPGA
 -- Design name    : sfp_udpontrig
 -- Module name    : ip_layer_component_pkg.vhd
--- Purpose        : package of components declarations
+-- Purpose        : package of components declarations for IP layer
 -- Author         : created automatically
 -- Synthesizable  : YES
 -- Language       : VHDL-93
@@ -107,37 +107,38 @@ package ip_layer_component_pkg is
     generic (
       no_default_gateway  : boolean := true       ;   -- set to FALSE if communicating with devices accessed
                                                       -- though a "default gateway or router"
-      CLOCK_FREQ          : integer := 125000000  ;   -- freq of data_in_clk -- needed to timout cntr
+      CLOCK_FREQ          : integer := 125000000  ;   -- Freq of data_in_clk -- needed to timout cntr
       ARP_TIMEOUT         : integer := 60         ;   -- ARP response timeout (s)
       ARP_MAX_PKT_TMO     : integer := 5          ;   -- # wrong nwk pkts received before set error
-      MAX_ARP_ENTRIES     : integer := 255            -- max entries in the arp store
+      MAX_ARP_ENTRIES     : integer := 255            -- Max entries in the arp store
       );
     port (
+      -- system signals (in)
+      our_mac_address     : in  std_logic_vector (47 downto 0);
+      our_ip_address      : in  std_logic_vector (31 downto 0);
+      nwk_gateway         : in  std_logic_vector (31 downto 0) := (others => '0');  -- IP address of default gateway
+      nwk_mask            : in  std_logic_vector (31 downto 0) := (others => '0');  -- Net mask
+      control             : in  arp_control_type;
+      -- status signals (out)
+      req_count           : out std_logic_vector(7 downto 0);     -- count of arp pkts received
       -- lookup request signals
-      arp_req_req       : in  arp_req_req_type;
-      arp_req_rslt      : out arp_req_rslt_type;
-      -- MAC layer RX signals
-      data_in_clk       : in  std_logic;
-      reset             : in  std_logic;
-      data_in           : in  std_logic_vector (7 downto 0);      -- ethernet frame (from dst mac addr through to last byte of frame)
-      data_in_valid     : in  std_logic;                          -- indicates data_in valid on clock
-      data_in_last      : in  std_logic;                          -- indicates last data in frame
-      -- MAC layer TX signals
-      mac_tx_req        : out std_logic;                          -- indicates that ip wants access to channel (stays up for as long as tx)
-      mac_tx_granted    : in  std_logic;                          -- indicates that access to channel has been granted
-      data_out_clk      : in  std_logic;
-      data_out_ready    : in  std_logic;                          -- indicates system ready to consume data
-      data_out_valid    : out std_logic;                          -- indicates data out is valid
-      data_out_first    : out std_logic;                          -- with data out valid indicates the first byte of a frame
-      data_out_last     : out std_logic;                          -- with data out valid indicates the last byte of a frame
-      data_out          : out std_logic_vector (7 downto 0);      -- ethernet frame (from dst mac addr through to last byte of frame)
-      -- system signals
-      our_mac_address   : in  std_logic_vector (47 downto 0);
-      our_ip_address    : in  std_logic_vector (31 downto 0);
-      nwk_gateway       : in  std_logic_vector (31 downto 0) := (others => '0');  -- IP address of default gateway
-      nwk_mask          : in  std_logic_vector (31 downto 0) := (others => '0');  -- Net mask
-      control           : in  arp_control_type;
-      req_count         : out std_logic_vector(7 downto 0)        -- count of arp pkts received
+      arp_req_req         : in  arp_req_req_type;
+      arp_req_rslt        : out arp_req_rslt_type;
+      -- MAC layer RX signals (in)
+      data_in_clk         : in  std_logic;
+      reset               : in  std_logic;
+      data_in             : in  std_logic_vector (7 downto 0);    -- Ethernet frame (from dst mac addr through to last byte of frame)
+      data_in_valid       : in  std_logic;                        -- indicates data_in valid on clock
+      data_in_last        : in  std_logic;                        -- indicates last data in frame
+      -- MAC layer TX signals (out)
+      mac_tx_req          : out std_logic;                        -- indicates that ip wants access to channel (stays up for as long as tx)
+      mac_tx_granted      : in  std_logic;                        -- indicates that access to channel has been granted
+      data_out_clk        : in  std_logic;
+      data_out_ready      : in  std_logic;                        -- indicates system ready to consume data
+      data_out_valid      : out std_logic;                        -- indicates data out is valid
+      data_out_first      : out std_logic;                        -- with data out valid indicates the first byte of a frame
+      data_out_last       : out std_logic;                        -- with data out valid indicates the last byte of a frame
+      data_out            : out std_logic_vector (7 downto 0)     -- ethernet frame (from dst mac addr through to last byte of frame)
       );
   end component;
 
