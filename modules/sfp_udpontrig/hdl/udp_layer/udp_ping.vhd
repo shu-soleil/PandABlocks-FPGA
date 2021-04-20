@@ -5,8 +5,9 @@
 -- Module name    : udp_ping.vhd
 -- Purpose        : ICMP layer which responds only to echo requests with an echo reply
 --                  Any other ICMP messages are discarded (ignored).
---                  Can respond to any ping containing up to 1472 bytes of data.
---                     which corresponds to an Ipv4 frame of 1500 bytes
+--                  Can respond to any ping containing 0 to 1472 bytes of data.
+--                  which is the maximum payload for Ethernet II Frame
+--                  (1500 bytes - 20 bytes of IPv4 header - 8 bytes of ICMP header)
 --
 -- Author         : Thierry GARREL (ELSYS-Design) [TGA]
 -- Synthesizable  : YES
@@ -16,14 +17,6 @@
 -- Copyright (c) 2021 Synchrotron SOLEIL - L'Orme des Merisiers Saint-Aubin
 -- BP 48 91192 Gif-sur-Yvette Cedex  - https://www.synchrotron-soleil.fr
 --------------------------------------------------------------------------------
-
--- TODO
--- Separate Rx side and Tx side with 2 clock domains rx_clk and tx_clk
--- Add 2-stage synchronizer between Rx site and Tx side
--- Rename FSM states to ST_<name>
-
--- DEAD code : never go in ERR state
-
 
 
 --==============================================================================
@@ -410,21 +403,17 @@ begin
         case rx_event is
           when NO_EVENT =>              -- (nothing to do)
           when DATA     =>
-            if rx_count = to_unsigned(C_ICMP_HEADER_LENGTH-1,16) then       -- 7
-              rx_count_mode   <= SET_VAL; -- rx_count restarts at 1
-              next_rx_state   <= USER_DATA;
-              set_rx_state    <= '1';
-              set_pkt_cnt     <= '1'; -- INCR; -- count another pkt received
-            else
-              rx_count_mode   <= INCR;
-              next_rx_state   <= ICMP_HEADER;
-            end if;
 
             -- handle early frame termination
-            if rx_in.data.data_in_last = '1' then
+            if rx_in.data.data_in_last = '1' and (rx_data_length /= 0) then
+              rx_count_mode   <= RST;
               next_rx_state   <= IDLE;
               set_rx_state    <= '1';
             else
+              -- default values
+              rx_count_mode   <= INCR;
+              next_rx_state   <= ICMP_HEADER;
+
               case rx_count is
                 -- ICMP header
                 when x"0001" => -- ignore pkts that are not ICMP Code 00 (Echo Request)
@@ -449,6 +438,18 @@ begin
                                                           -- since the Ping response checksum only differs of 2048 (x"0800")
                                                           -- from the incoming Ping request checksum
 
+                                set_pkt_cnt     <= '1'; -- INCR; -- count another pkt received
+
+                                if rx_data_length = 0 then    -- ping with 0 bytes of data
+                                  rx_count_mode   <= RST;
+                                  next_rx_state   <= IDLE;
+                                  set_rx_state    <= '1';
+                                else
+                                  rx_count_mode   <= SET_VAL; -- rx_count restarts at 1
+                                  next_rx_state   <= USER_DATA;
+                                  set_rx_state    <= '1';
+                                end if;
+
                 when others =>  -- ignore other bytes in ICMP header
               end case;
             end if;
@@ -464,7 +465,9 @@ begin
 
           when DATA =>                  -- note: data gets transfered upstream as part of "outputs followers" processing
 
-            if rx_count = (rx_data_length) then     -- end of ip_rx frame
+            -- In this state rx_count counts from 1 to rx_data_length (and rx_data_length /= 0)
+
+            if rx_count = (rx_data_length) then     -- end of frame
               rx_count_mode <= RST;
 
               if rx_in.data.data_in_last = '1' then
@@ -656,6 +659,11 @@ begin
                 when x"0005" => tx_data_out <= icmp_rx_header.identifier( 7 downto 0);
                 when x"0006" => tx_data_out <= icmp_rx_header.seq_number(15 downto 8);
                 when x"0007" => tx_data_out <= icmp_rx_header.seq_number( 7 downto 0);
+                                -- ping with 0 bytes of data
+                                if (rx_data_length = 0) then
+                                  tx_data_last <= '1';
+                                end if;
+
                 when others =>
                   -- shouldnt get here - handle as error
               end case;
@@ -703,7 +711,6 @@ begin
     rx_data_length, set_ip_tx_start
     )
     begin
-
       -- set signal defaults
       next_tx_state       <= IDLE;    -- prevent from infering a latch
       set_tx_state        <= '0';
@@ -724,7 +731,7 @@ begin
             -- start to send UDP header
             next_tx_state   <= PAUSE;
             set_tx_state    <= '1';
-            set_ip_tx_start <= SET;
+            set_ip_tx_start <= SET;   -- rise ip_tx_start
         end if;
 
       -----------------
@@ -744,7 +751,7 @@ begin
       when SEND_ICMP_HEADER =>
 
         if ip_tx_result = IPTX_RESULT_ERR then        -- 0x10
-          set_ip_tx_start <= CLR;
+          set_ip_tx_start <= CLR;    -- reset ip_tx_start
           next_tx_state   <= IDLE;
           set_tx_state    <= '1';
         else
@@ -752,9 +759,18 @@ begin
           if ip_tx_data_out_ready = '1' then
 
             if tx_count = to_unsigned(C_ICMP_HEADER_LENGTH-1,16) then       -- 7
-              tx_count_mode <= SET_VAL;
-              next_tx_state <= SEND_USER_DATA;
-              set_tx_state  <= '1';
+
+              -- ping with 0 bytes of data : TX terminated normally
+              if (rx_data_length = 0) then
+                tx_count_mode     <= RST;     -- reset tx_count
+                next_tx_state     <= IDLE;
+                set_tx_state      <= '1';
+                set_ip_tx_start   <= CLR;     -- reset ip_tx_start
+              else
+                tx_count_mode <= SET_VAL;  -- -- tx_count restarts at 1
+                next_tx_state <= SEND_USER_DATA;
+                set_tx_state  <= '1';
+              end if;
             else
               tx_count_mode <= INCR;
               next_tx_state <= SEND_ICMP_HEADER;
@@ -777,7 +793,7 @@ begin
         -- wait until ip tx is ready to accept data
         if ip_tx_data_out_ready = '1' then
 
-          if tx_count = unsigned(rx_data_length) then       -- +++ 13.04
+          if tx_count = unsigned(rx_data_length) then
             -- TX terminated due to count - end normally
             tx_count_mode         <= RST;
             next_tx_state         <= IDLE;
