@@ -13,7 +13,7 @@ set_param board.repoPaths $TARGET_DIR/configs
 
 # Create project
 create_project -force -in_memory panda_carrier_top \
-    $BUILD_DIR/panda_carier_top -part xc7z030sbg485-1
+    $BUILD_DIR/panda_carrier_top -part xc7z030sbg485-1
 
 # Set the directory path for the new project
 set proj_dir [get_property directory [current_project]]
