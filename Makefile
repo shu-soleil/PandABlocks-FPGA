@@ -2,6 +2,8 @@
 
 TOP := $(CURDIR)
 
+# Need bash for the source command in Xilinx settings64.sh
+SHELL = /bin/bash
 
 # The following symbols MUST be defined in the CONFIG file before being used.
 PANDA_ROOTFS = $(error Define PANDA_ROOTFS in CONFIG file)
@@ -10,7 +12,7 @@ VIVADO = $(error Define VIVADO in CONFIG file)
 APP_NAME = $(error Define APP_NAME in CONFIG file)
 
 # Build defaults that can be overwritten by the CONFIG file if required
-PYTHON = python2
+PYTHON = python
 SPHINX_BUILD = sphinx-build
 MAKE_ZPKG = $(PANDA_ROOTFS)/make-zpkg
 MAKE_GITHUB_RELEASE = $(PANDA_ROOTFS)/make-github-release.py
@@ -47,6 +49,7 @@ ifndef ALL_APPS
 ALL_APPS := $(wildcard apps/*.app.ini)
 # Exclude udpontrig apps as they can't currently be built with our license
 ALL_APPS := $(filter-out $(wildcard apps/*udpontrig*),$(ALL_APPS))
+ALL_APPS := $(filter-out $(wildcard apps/*eventr*),$(ALL_APPS))
 ALL_APPS := $(notdir $(ALL_APPS))
 ALL_APPS := $(ALL_APPS:.app.ini=)
 endif
@@ -100,7 +103,7 @@ export GIT_VERSION := $(shell git describe --abbrev=7 --dirty --always --tags)
 export VERSION := $(shell ./common/python/parse_git_version.py "$(GIT_VERSION)")
 # 8 if dirty, 0 if clean
 DIRTY_PRE = $(shell \
-    python -c "print 8 if '$(GIT_VERSION)'.endswith('dirty') else 0")
+    python -c "print(8 if '$(GIT_VERSION)'.endswith('dirty') else 0)")
 # Something like 85539563
 export SHA := $(DIRTY_PRE)$(shell git rev-parse --short=7 HEAD)
 
@@ -170,17 +173,17 @@ hdl_test: $(TIMING_BUILD_DIRS) $(BUILD_DIR)/hdl_timing/pcap
 	rm -rf $(TEST_DIR)/*.jou
 	rm -rf $(TEST_DIR)/*.log
 	mkdir -p $(TEST_DIR)
-	cd $(TEST_DIR) && source $(VIVADO) && vivado -mode batch -notrace \
+	cd $(TEST_DIR) && . $(VIVADO) && vivado -mode batch -notrace \
 	 -source ../../tests/hdl/regression_tests.tcl -tclargs $(MODULE)
 
 # Make the hdl_timing folders and run a single test, set TEST argument
 # E.g. make TEST="clock 1" single_hdl_test
-single_hdl_test: $(TIMING_BUILD_DIRS)
+single_hdl_test: $(TIMING_BUILD_DIRS) $(BUILD_DIR)/hdl_timing/pcap
 	rm -rf $(TEST_DIR)/single_test
 	rm -rf $(TEST_DIR)/*.jou
 	rm -rf $(TEST_DIR)/*.log
 	mkdir -p $(TEST_DIR)
-	cd $(TEST_DIR) && source $(VIVADO) && vivado -mode batch -notrace \
+	cd $(TEST_DIR) && . $(VIVADO) && vivado -mode batch -notrace \
 	 -source ../../tests/hdl/single_test.tcl -tclargs $(TEST)
 
 # Make the hdl_timing folders without running tests
@@ -197,11 +200,6 @@ SLOW_FPGA_FILE = $(SLOW_FPGA_BUILD_DIR)/slow_top.bin
 FPGA_DEPENDS =
 
 SLOW_FPGA_DEPENDS =
-SLOW_FPGA_DEPENDS += tools/virtexHex2Bin
-
-tools/virtexHex2Bin: tools/virtexHex2Bin.c
-	gcc -o $@ $<
-
 
 $(FPGA_FILE): $(AUTOGEN_BUILD_DIR) $(FPGA_DEPENDS)
 	mkdir -p $(dir $@)
@@ -222,9 +220,9 @@ ifdef SKIP_FPGA_BUILD
 	touch $@
 else
 	echo building SlowFPGA
-	source $(ISE)  &&  \
+	. $(ISE)  &&  \
         $(MAKE) -C $(dir $@) -f $(TARGET_DIR)/SlowFPGA/Makefile \
-            TOP=$(TOP) SRC_DIR=$(TARGET_DIR)/SlowFPGA mcs \
+            TOP=$(TOP) SRC_DIR=$(TARGET_DIR)/SlowFPGA bin \
             BUILD_DIR=$(dir $@)
 endif
 
