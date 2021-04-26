@@ -226,10 +226,10 @@ else
             BUILD_DIR=$(dir $@)
 endif
 
-slow-fpga: $(SLOW_FPGA_BUILD_DIR) $(SLOW_FPGA_FILE)
+slow-fpga: $(SLOW_FPGA_FILE)
 .PHONY: slow-fpga
 
-carrier-fpga: $(FPGA_BUILD_DIR) $(FPGA_FILE)
+carrier-fpga: $(FPGA_FILE)
 .PHONY: carrier-fpga
 
 
